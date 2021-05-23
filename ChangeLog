@@ -1,8 +1,16 @@
-This is ChangeLog
-Wed Jun  6 21:58:51 EDT 2012
+ChangeLog
 
-rxtx-2.1 and rxtx-2.0 changes are kept in the same file.  skip to the version
-you downloaded.
+RXTX-github-cardonr-2.2-pre1 (18 May 2021)
+
+		Code base: 
+			C code based on commit 51b44c26 of Alexander Graf (alex@antistatix.de) on 06/10/2012 00:17:50 (https://github.com/rxtx/rxtx) 
+			Java code based on 2.1-7r2 to ensure backward compatibility with CARDS (http://rxtx.qbang.org)
+		Build with Microsoft Visual Studio 2019 (or Build tools for Visual Studio 2019) and Windows 10 SDK
+		Removed support for other operating systems than Windows.
+		Removed support for RS485, Parallel port, … Only Serial port remains.
+		Replaced polling programming by event based programming (Windows only), for performance reasons. Polling is discouraged by Microsoft and may prevent the good working of Citrix serial port redirection. In the previous versions of RXTX, loops with short sleep time were used for reading data and for serial events (eventLoop). Starting from this version, there is no ‘sleep’ anymore: the threads remain blocked by the operating system till an event occurs: a byte is read, an event occurred, or an interruption is requested (in order to close the serial port). This is a major improvement that considerably reduce CPU usage (High CPU usage with RXTX is often reported). 
+		Added Java class ThreadedBufferedInputStream: a buffered input stream that's filled by using a separate thread, and that doesn’t poll the underlying inputstream. This allows a Java application to poll the ‘available’ method without polling the Windows API.
+		Add support for DLL loading with JNLPAppletLauncher (for backward compatibility with CARDS application)
 
 2.2 
    

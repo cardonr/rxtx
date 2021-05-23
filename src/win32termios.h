@@ -99,11 +99,12 @@ typedef unsigned int    tcflag_t;
    interfaces.
 */
 
-struct timespec
+///CARDON FIXME
+/*struct timespec
 {
 	time_t	tv_sec;
 	long	tv_nsec;
-};
+};*/
 
 #define NCCS 32
 struct termios
@@ -162,6 +163,10 @@ int serial_write(int fd, char *Str, int length);
  */
 #ifndef __LCC__
 int serial_select(int, struct fd_set *, struct fd_set *, struct fd_set *, struct timeval *);
+
+int serial_wait_comm_event(int  fd, LPDWORD dwCommEvent);
+int get_comm_status(int fd, LPDWORD lpdwModemStatus);
+
 #define select serial_select
 #endif
 
@@ -490,3 +495,10 @@ find a way to get/set buad_base and divisor directly.
 
 
 #define CMSPAR      010000000000  /* mark or space parity */
+
+
+
+//added by CARDON
+#define E_CUSTOM_SERIAL_FRAME 5001
+#define E_CUSTOM_SERIAL_RX_PARITY  5002
+#define E_CUSTOM_SERIAL_BREAK 5003

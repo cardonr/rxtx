@@ -148,7 +148,17 @@
 #include	<lockdev.h>
 #endif /* LIBLOCKDEV */
 
-extern int errno;
+//cardon
+//extern int errno;
+
+#define MAXLEN 255
+
+#ifdef DEBUG_VERBOSE
+
+char message[MAXLEN + 1];
+#endif /* DEBUG_VERBOSE*/
+
+
 
 #ifdef WIN32
 #  define uintptr_t UINT_PTR
@@ -695,7 +705,9 @@ JNIEXPORT jint JNICALL RXTXPort(open)(
 	}
 
 	do {
-		fd=OPEN (filename, O_RDWR | O_NOCTTY | O_NONBLOCK );
+		//changed by Cardon: remove O_NONBLOCK
+		//fd=OPEN (filename, O_RDWR | O_NOCTTY | O_NONBLOCK );
+		fd = OPEN(filename, O_RDWR | O_NOCTTY);
 	}  while (fd < 0 && errno==EINTR);
 
 #ifdef OPEN_EXCL
@@ -730,7 +742,7 @@ fail:
 	(*env)->ReleaseStringUTFChars( env, jstr, filename );
 	LEAVE( "RXTXPort:open" );
 	throw_java_exception( env, PORT_IN_USE_EXCEPTION, "open",
-		strerror( errno ) );
+		strlen(message) ? message : strerror( errno ) );
 	return -1;
 }
 
@@ -3019,6 +3031,9 @@ GetTickCount()
 
 #endif /* !WIN32 */
 
+// changed by Cardon: threshold and timeout to be implemented at Java level.
+// timeout must be 0
+
 /*----------------------------------------------------------
 read_byte_array
 
@@ -3045,11 +3060,20 @@ int read_byte_array( JNIEnv *env,
                      int length,
                      int timeout )
 {
+
+	//added by Cardon
+	if (timeout > 0)
+	{
+		report("read_byte_array: FATAL error: timeout is not supported by native library.\n");
+		return -1;
+	}
+
+
 	int ret, left, bytes = 0;
-	long timeLeft, now = 0, start = 0;
+	//long timeLeft, now = 0, start = 0;
 	/* char msg[80]; */
-	struct timeval tv, *tvP;
-	fd_set rset;
+	//struct timeval tv, *tvP;
+	//fd_set rset;
 	/* TRENT */
 	int flag, count = 0;
 	struct event_info_struct *eis = get_java_var_eis( env, *jobj );
@@ -3061,7 +3085,7 @@ int read_byte_array( JNIEnv *env,
 	}
 	
 	
-	report_time_start();
+	//report_time_start();
 	flag = eis->eventflags[SPE_DATA_AVAILABLE];
 	eis->eventflags[SPE_DATA_AVAILABLE] = 0;
 /*
@@ -3070,39 +3094,42 @@ int read_byte_array( JNIEnv *env,
 	report( msg );
 */
 	left = length;
-	if (timeout >= 0)
-		start = GetTickCount();
-	while( bytes < length &&  count++ < 20 ) /* && !is_interrupted( eis ) )*/
-	{
-		if (timeout >= 0) {
-			now = GetTickCount();
-			if ( now-start >= timeout )
-			{
-				eis->eventflags[SPE_DATA_AVAILABLE] = flag;
-				return bytes;
-			}
-		}
+	//if (timeout >= 0)
+	//	start = GetTickCount();
+	//while( bytes < length &&  count++ < 20 ) /* && !is_interrupted( eis ) )*/
+	//{
+//		if (timeout >= 0) {
+//			now = GetTickCount();
+//			if ( now-start >= timeout )
+//			{
+//				eis->eventflags[SPE_DATA_AVAILABLE] = flag;
+//				return bytes;
+//			}
+//		}
 
-		FD_ZERO(&rset);
-		FD_SET(fd, &rset);
 
-		if (timeout >= 0){
-			timeLeft = timeout - (now - start);
-			tv.tv_sec = timeLeft / 1000;
-			tv.tv_usec = 1000 * ( timeLeft % 1000 );
-			tvP = &tv;
-		}
-		else{
-			tvP = NULL;
-		}
+		//comment of Rodolphe: see https://man7.org/linux/man-pages/man2/pselect.2.html
+		//not used with windows (see SELECT later)
+//		FD_ZERO(&rset);
+//		FD_SET(fd, &rset);
+
+//		if (timeout >= 0){
+//			timeLeft = timeout - (now - start);
+//			tv.tv_sec = timeLeft / 1000;
+//			tv.tv_usec = 1000 * ( timeLeft % 1000 );
+//			tvP = &tv;
+//		}
+//		else{
+//			tvP = NULL;
+//		}
 		/* FIXME HERE Trent */
-#ifndef WIN32
-		do {
-			ret = SELECT( fd + 1, &rset, NULL, NULL, tvP );
-		} while (ret < 0 && errno==EINTR);
-#else
+//#ifndef WIN32
+//		do {
+//			ret = SELECT( fd + 1, &rset, NULL, NULL, tvP ); //note of cardon: tvP=timeout structure
+//		} while (ret < 0 && errno==EINTR);
+//#else
 		ret = 1;
-#endif /* WIN32 */
+//#endif /* WIN32 */
 		if (ret == -1){
 			report( "read_byte_array: select returned -1\n" );
 			LEAVE( "read_byte_array" );
@@ -3113,8 +3140,36 @@ int read_byte_array( JNIEnv *env,
 		{
 			if ((ret = READ( fd, buffer + bytes, left )) < 0 ){
 				if (errno != EINTR && errno != EAGAIN){
+					// EINTR 4 Interrupted system call
+					// EAGAIN Resource temporarily unavailable
+					// EAGAIN Non-blocking  I/O has been selected using O_NONBLOCK and no data was immediately available for reading.
 					report( "read_byte_array: read returned -1\n" );
-					LEAVE( "read_byte_array" );
+					if (errno == E_CUSTOM_SERIAL_BREAK) {
+						report("read_byte_array: break event\n");
+						if(eis->eventflags[SPE_BI]){
+							send_event(eis, SPE_BI, 1);
+						}
+					}
+					if (errno == E_CUSTOM_SERIAL_RX_PARITY) {
+						report("read_byte_array: parity error\n");
+						if(eis->eventflags[SPE_PE]){
+							send_event(eis, SPE_PE,	1);
+						}
+					}
+					if (errno == E_CUSTOM_SERIAL_FRAME) {
+						report("read_byte_array: framing error\n");
+						if (eis->eventflags[SPE_FE]) {
+							send_event(eis, SPE_FE, 1);
+						}
+					}
+					LEAVE("read_byte_array");
+					eis->eventflags[SPE_DATA_AVAILABLE] = flag;
+					return -1;
+				}
+				if (errno == EINTR) {
+					//Cardon: not used. In case of interruption, serial_read will return 0 byte succesfully (no error)
+					report("read_byte_array: returned EINTR: interrupted by a signal\n");
+					LEAVE("read_byte_array");
 					eis->eventflags[SPE_DATA_AVAILABLE] = flag;
 					return -1;
 				}
@@ -3124,6 +3179,8 @@ int read_byte_array( JNIEnv *env,
 			else if ( ret ) {
 				bytes += ret;
 				left -= ret;
+
+				//cardon: missing checking if left is 0 to exit the loop ??
 			}
 		/*
 		The only thing that is bugging me with the new
@@ -3135,11 +3192,11 @@ int read_byte_array( JNIEnv *env,
 
 		Nicolas <ripley@8d.com>
 		*/
-			else {
-				/* usleep(10); */
-				usleep(1000);
-			}
-		}
+		//	else {
+		//		/* usleep(10); */
+		//		usleep(1000);
+		//	}
+		//}
 	}
 
 /*
@@ -3158,129 +3215,6 @@ int read_byte_array( JNIEnv *env,
 	return bytes;
 }
 
-#ifdef asdf
-int read_byte_array(	JNIEnv *env,
-			jobject *jobj,
-			int fd,
-			unsigned char *buffer,
-			int length,
-			int timeout )
-{
-	int ret, left, bytes = 0;
-	long now, start = 0;
-	char msg[80];
-
-	report_time_start();
-	ENTER( "read_byte_array" );
-	sprintf(msg, "read_byte_array requests %i\n", length);
-	report( msg );
-	left = length;
-	if (timeout >= 0)
-		start = GetTickCount();
-	while( bytes < length )
-	{
-		if (timeout >= 0) {
-			now = GetTickCount();
-			if (now-start >= timeout)
-				return bytes;
-		}
-RETRY:	if ((ret = READ( fd, buffer + bytes, left )) < 0 )
-		{
-			if (errno == EINTR)
-				goto RETRY;
-			report( "read_byte_array: read returned -1\n" );
-			LEAVE( "read_byte_array" );
-			return -1;
-		}
-		bytes += ret;
-		left -= ret;
-	}
-	sprintf(msg, "read_byte_array returns %i\n", bytes);
-	report( msg );
-	LEAVE( "read_byte_array" );
-	report_time_end();
-	return bytes;
-}
-
-
-int read_byte_array(	JNIEnv *env,
-			jobject *jobj,
-			int fd,
-			unsigned char *buffer,
-			int length,
-			int timeout )
-{
-	int ret, left, bytes = 0;
-	/* int count = 0; */
-	fd_set rfds;
-	struct timeval sleep;
-	struct event_info_struct *eis = find_eis( fd );
-
-#ifndef WIN32
-	struct timeval *psleep=&sleep;
-#endif /* WIN32 */
-
-	ENTER( "read_byte_array" );
-	left = length;
-	FD_ZERO( &rfds );
-	FD_SET( fd, &rfds );
-	if( timeout != 0 )
-	{
-		sleep.tv_sec = timeout / 1000;
-		sleep.tv_usec = 1000 * ( timeout % 1000 );
-	}
-	while( bytes < length )
-	{
-         /* FIXME: In Linux, select updates the timeout automatically, so
-            other OSes will need to update it manually if they want to have
-            the same behavior.  For those OSes, timeouts will occur after no
-            data AT ALL is received for the timeout duration.  No big deal. */
-#ifndef WIN32
-		do {
-			if( timeout == 0 ) psleep = NULL;
-			ret=SELECT( fd + 1, &rfds, NULL, NULL, psleep );
-		}  while (ret < 0 && errno==EINTR);
-#else
-		/*
-		    the select() needs some work before the above will
-		    work on win32.  The select code cannot be accessed
-		    from both the Monitor Thread and the Reading Thread.
-
-		*/
-		ret = RXTXPort(nativeavailable)( env, *jobj );
-#endif /* WIN32 */
-		if( ret == 0 )
-		{
-			report( "read_byte_array: select returned 0\n" );
-			LEAVE( "read_byte_array" );
-			break;
-		}
-		if( ret < 0 )
-		{
-			report( "read_byte_array: select returned -1\n" );
-			LEAVE( "read_byte_array" );
-			return -1;
-		}
-		ret = READ( fd, buffer + bytes, left );
-		if( ret == 0 )
-		{
-			report( "read_byte_array: read returned 0 bytes\n" );
-			LEAVE( "read_byte_array" );
-			break;
-		}
-		else if( ret < 0 )
-		{
-			report( "read_byte_array: read returned -1\n" );
-			LEAVE( "read_byte_array" );
-			return -1;
-		}
-		bytes += ret;
-		left -= ret;
-	}
-	LEAVE( "read_byte_array" );
-	return bytes;
-}
-#endif /* asdf */
 
 /*----------------------------------------------------------
 NativeEnableReceiveTimeoutThreshold
@@ -3529,7 +3463,7 @@ JNIEXPORT jint JNICALL RXTXPort(readArray)( JNIEnv *env,
 		report( "RXTXPort:readArray bytes < 0" );
 		LEAVE( "RXTXPort:readArray" );
 		throw_java_exception( env, IO_EXCEPTION, "readArray",
-			strerror( errno ) );
+			"IO Error");
 		return -1;
 	}
 /*
@@ -3865,10 +3799,10 @@ void check_cgi_count( struct event_info_struct *eis )
 	/* JK00: only use it if supported by this port */
 
 	struct serial_icounter_struct sis;
-	memcpy( &sis, &eis->osis, sizeof( struct serial_icounter_struct ) );
+	memcpy( &sis, &eis->osis, sizeof( struct serial_icounter_struct ) ); //save old sis in ios
 
 	if( ioctl( eis->fd, TIOCGICOUNT, &sis ) )
-	{
+	{//CARDON: error when ictl doesn't return 0
 		report( "check_cgi_count: TIOCGICOUNT\n is not 0\n" );
 		return;
 	}
@@ -3907,7 +3841,7 @@ int port_has_changed_fionread( struct event_info_struct *eis )
 	int change, rc;
 	char message[80];
 
-	rc = ioctl( eis->fd, FIONREAD, &change );
+	rc = ioctl( eis->fd, FIONREAD, &change ); //Cardon: return number of byte in queue 
 	sprintf( message, "port_has_changed_fionread: change is %i ret is %i\n", change, eis->ret );
 	report_verbose( message );
 #if defined(__unixware__) || defined(__sun__)
@@ -4052,11 +3986,11 @@ void report_serial_events( struct event_info_struct *eis )
 			return;
 
 	if ( eis && eis->has_tiocgicount )
-		check_cgi_count( eis );
+		check_cgi_count( eis ); //Cardon: use ClearCommError to check if an error occured, instead of SetCommMask first
 #ifndef WIN32 /* something is wrong here */
 #endif /* WIN32 */
 
-	check_tiocmget_changes( eis );
+	check_tiocmget_changes( eis ); // Cardon: check CTS, DSR, RING, ... with IOGET instead of SetCommMask
 	if( eis && port_has_changed_fionread( eis ) )
 	{
 		if(!eis->eventflags[SPE_DATA_AVAILABLE] )
@@ -4108,9 +4042,9 @@ int initialise_event_info_struct( struct event_info_struct *eis )
 	memset(&eis->osis,0,sizeof(eis->osis));
 #endif /* TIOCGICOUNT */
 
-	if( index )
+	if( index ) //remark of Cardon: master_index was already initialized
 	{
-		while( index->next )
+		while( index->next ) //looking for the last index, and adding this new struc to the end of the list
 		{
 			index = index->next;
 		}
@@ -4118,7 +4052,7 @@ int initialise_event_info_struct( struct event_info_struct *eis )
 		eis->prev = index;
 		eis->next = NULL;
 	}
-	else
+	else //remark of Cardon: master_index is not initialized yet
 	{
 		master_index = eis;
 		master_index->next = NULL;
@@ -4134,7 +4068,7 @@ int initialise_event_info_struct( struct event_info_struct *eis )
 	eis->closing = 0;
 
 	eis->fd = get_java_var_fd( env, jobj );
-	eis->has_tiocsergetlsr = has_line_status_register_access( eis->fd );
+	eis->has_tiocsergetlsr = has_line_status_register_access( eis->fd );  //Cardon: not really doing something on Windows
 	eis->has_tiocgicount = driver_has_tiocgicount( eis );
 
 	if( ioctl( eis->fd, TIOCMGET, &eis->omflags) < 0 ) {
@@ -4145,9 +4079,11 @@ int initialise_event_info_struct( struct event_info_struct *eis )
 		"(IZ)Z" );
 	if(eis->send_event == NULL)
 		goto fail;
+
+
 end:
 	FD_ZERO( &eis->rfds );
-	FD_SET( eis->fd, &eis->rfds );
+	FD_SET( eis->fd, &eis->rfds ); // https://man7.org/linux/man-pages/man2/select.2.html rfds = set of file descriptor, watched to see if ready for reading (=if a read will not  block)
 	eis->tv_sleep.tv_sec = 0;
 	eis->tv_sleep.tv_usec = 1000;
 	eis->initialised = 1;
@@ -4189,6 +4125,7 @@ void finalize_event_info_struct( struct event_info_struct *eis )
 		eis->prev->next = NULL;
 	else master_index = NULL;
 	
+
 	free( eis );
 }
 
@@ -4203,9 +4140,7 @@ RXTXPort.eventLoop
 ----------------------------------------------------------*/
 JNIEXPORT void JNICALL RXTXPort(eventLoop)( JNIEnv *env, jobject jobj )
 {
-#ifdef WIN32
 	int i = 0;
-#endif /* WIN32 */
 	struct event_info_struct* peis = malloc( sizeof( struct event_info_struct ) );
 
 	if ( peis == NULL )
@@ -4220,61 +4155,186 @@ JNIEXPORT void JNICALL RXTXPort(eventLoop)( JNIEnv *env, jobject jobj )
 	peis->initialised = 0;
 
 	ENTER( "eventLoop\n" );
-	if ( !initialise_event_info_struct( peis ) ) goto end;
-	if ( !init_threads( peis ) ) goto end;
+	if ( !initialise_event_info_struct( peis ) ) goto end; //Cardon: initializes the sendEvent java method
+	if ( !init_threads( peis ) ) goto end; //Cardon: set the java member eis 
 	unlock_monitor_thread( peis );
+	DWORD dwCommEvent;
 	do{
-		report_time_eventLoop( );
-		do {
-			/* nothing goes between this call and select */
-			if( peis->closing )
-			{
-				report("eventLoop: got interrupt\n");
-				finalize_threads( peis );
-				finalize_event_info_struct( peis );
-				LEAVE("eventLoop");
+		report_time_eventLoop( ); //Cardon: do nothing
+		dwCommEvent = 0;
+		/* nothing goes between this call and select */
+		if( peis->closing )
+		{
+			report("eventLoop: got interrupt\n");
+			finalize_threads( peis );
+			finalize_event_info_struct( peis );
+			LEAVE("eventLoop");
+			goto end;
+		}
+
+		peis->ret = serial_wait_comm_event(peis->fd, &dwCommEvent);
+		if (peis->closing)
+		{
+			report("eventLoop: got interrupt\n");
+			finalize_threads(peis);
+			finalize_event_info_struct(peis);
+			LEAVE("eventLoop");
+			goto end;
+		}
+		if (!peis->ret) {
+			report("eventLoop: serial_wait_comm_event failed\n");
+			LEAVE("eventLoop");
+			goto end;
+		}
+		//https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-waitcommevent
+
+		if (dwCommEvent & EV_CTS
+		|| dwCommEvent & EV_DSR
+		|| dwCommEvent & EV_RING
+		|| dwCommEvent & EV_RLSD) {
+
+			DWORD dwModemStatus;
+			BOOL  fCTS, fDSR, fRING, fRLSD;
+
+			if (!get_comm_status(peis->fd, &dwModemStatus)){
+				report("eventloop: get_comm_status failed. Quit event loop.\n");
 				goto end;
 			}
-#ifndef WIN32
-			/* report( "." ); */
-			do {
-				peis->ret = SELECT( peis->fd + 1, &(peis->rfds), NULL, NULL,
-					&(peis->tv_sleep) );
-			} while (peis->ret < 0 && errno==EINTR);
-#else
-			/*
-			    termios.c:serial_select is instable for some
-			    reason
 
-			    polling is not blowing up.
-			*/
-/*
-			usleep(5000);
-*/
-			peis->ret=1;
-			while( i++ < 5 )
-			{
-				if(peis->eventflags[SPE_DATA_AVAILABLE] )
-				{
-					if( port_has_changed_fionread( peis ) )
-					{
-						send_event( peis, SPE_DATA_AVAILABLE, 1 );
-					}
-				}
-				usleep(1000);
+			fCTS = MS_CTS_ON & dwModemStatus;
+			fDSR = MS_DSR_ON & dwModemStatus;
+			fRING = MS_RING_ON & dwModemStatus;
+			fRLSD = MS_RLSD_ON & dwModemStatus;
+
+			if (dwCommEvent & EV_CTS) {
+				report("eventloop: get CTS.\n");
+				send_event(peis, SPE_CTS, fCTS);
 			}
-			i = 0;
-#endif /* WIN32 */
-		}  while ( peis->ret < 0 && errno == EINTR );
-		if( peis->ret >= 0 )
-		{
-			report_serial_events( peis );
+			if (dwCommEvent & EV_DSR) {
+				report("eventloop: get DSR.\n");
+				send_event(peis, SPE_DSR, fDSR);
+			}
+			if (dwCommEvent & EV_RING) {
+				report("eventloop: get RING.\n");
+				send_event(peis, SPE_RI, fRING);
+			}
+			if (dwCommEvent & EV_RLSD) {
+				report("eventloop: get RLSD.\n");
+				send_event(peis, SPE_CD, fRLSD);
+			}
 		}
-		initialise_event_info_struct( peis );
+		//The occurrence of the EV_ERR event indicates that an error condition exists in the communications port. Other errors can occur in the port that do not cause the EV_ERR event to occur.
+		if (dwCommEvent & EV_ERR) {
+			//errors MAY NOT be tracked with Comm events, but only detected, cleared, (and fired to event listener) during read or write operations.
+			report("eventLoop: got unexpected EV_ERR event. Should not be tracked.\n");
+		}
+		if (dwCommEvent & EV_BREAK) {
+			report("eventLoop: got unexpected EV_BREAK event. Should not be tracked.\n");
+		}
+		if (dwCommEvent & EV_RXCHAR) {
+			report("eventLoop: got unexpected EV_RXCHAR event. Should not be tracked.\n");
+		}
+		if (dwCommEvent & EV_RXFLAG) {
+			// event character was received and placed in the input buffer.
+			//this event should only happen for non binary transmission.
+			report("eventLoop: got unexpected EV_RXFLAG event. Should not happen.\n");
+
+		}
+		if (dwCommEvent & EV_TXEMPTY) {
+			send_event(peis, SPE_OUTPUT_BUFFER_EMPTY, 1);
+		}
+
+
 	} while( 1 );
 end:
 	LEAVE( "eventLoop:  Bailing!\n" );
 }
+
+
+///original copy
+///*----------------------------------------------------------
+//RXTXPort.eventLoop
+//
+//   accept:      none
+//   perform:     periodically check for SerialPortEvents
+//   return:      none
+//   exceptions:  none
+//   comments:	please keep this function clean.
+//----------------------------------------------------------*/
+//JNIEXPORT void JNICALL RXTXPort(eventLoop)(JNIEnv* env, jobject jobj)
+//{
+//#ifdef WIN32
+//	int i = 0;
+//#endif /* WIN32 */
+//	struct event_info_struct* peis = malloc(sizeof(struct event_info_struct));
+//
+//	if (peis == NULL)
+//	{
+//		report("eventLoop: FATAL error: can not allocate eis structure\n");
+//		goto end;
+//	}
+//
+//	peis->jclazz = (*env)->GetObjectClass(env, jobj);
+//	peis->env = env;
+//	peis->jobj = &jobj;
+//	peis->initialised = 0;
+//
+//	ENTER("eventLoop\n");
+//	if (!initialise_event_info_struct(peis)) goto end; //Cardon: initializes the sendEvent java method
+//	if (!init_threads(peis)) goto end; //Cardon: set the java member eis 
+//	unlock_monitor_thread(peis);
+//	do {
+//		report_time_eventLoop(); //Cardon: do nothing
+//		do {
+//			/* nothing goes between this call and select */
+//			if (peis->closing)
+//			{
+//				report("eventLoop: got interrupt\n");
+//				finalize_threads(peis);
+//				finalize_event_info_struct(peis);
+//				LEAVE("eventLoop");
+//				goto end;
+//			}
+//#ifndef WIN32
+//			/* report( "." ); */
+//			do {
+//				peis->ret = SELECT(peis->fd + 1, &(peis->rfds), NULL, NULL,
+//					&(peis->tv_sleep));
+//			} while (peis->ret < 0 && errno == EINTR);
+//#else
+//			/*
+//				termios.c:serial_select is instable for some
+//				reason
+//
+//				polling is not blowing up.
+//			*/
+//			/*
+//						usleep(5000);
+//			*/
+//			peis->ret = 1;
+//			while (i++ < 5)
+//			{
+//				if (peis->eventflags[SPE_DATA_AVAILABLE])
+//				{
+//					if (port_has_changed_fionread(peis))
+//					{
+//						send_event(peis, SPE_DATA_AVAILABLE, 1);
+//					}
+//				}
+//				usleep(1000);
+//			}
+//			i = 0;
+//#endif /* WIN32 */
+//		} while (peis->ret < 0 && errno == EINTR);
+//		if (peis->ret >= 0)
+//		{
+//			report_serial_events(peis);
+//		}
+//		initialise_event_info_struct(peis); //remark Cardon: reset the peis with FD_ZERO (clear the set)
+//	} while (1);
+//end:
+//	LEAVE("eventLoop:  Bailing!\n");
+//}
 
 /*----------------------------------------------------------
 RXTXVersion.nativeGetVersion
@@ -4292,7 +4352,7 @@ RXTXVersion.nativeGetVersion
 JNIEXPORT jstring JNICALL RXTXVersion(nativeGetVersion) (JNIEnv *env,
 	jclass jclazz )
 {
-	return (*env)->NewStringUTF( env, "RXTX-2.2" );
+	return (*env)->NewStringUTF( env, "RXTX-github-cardonr-2.2-pre1" );
 }
 
 /*----------------------------------------------------------
@@ -5164,7 +5224,7 @@ void throw_java_exception( JNIEnv *env, char *exc, char *foo, char *msg )
 #if defined(_GNU_SOURCE)
 	snprintf( buf, 60, "%s in %s", msg, foo );
 #else
-	sprintf( buf,"%s in %s", msg, foo );
+	snprintf( buf, sizeof(buf),"%s in %s", msg, foo );
 #endif /* _GNU_SOURCE */
 	(*env)->ThrowNew( env, clazz, buf );
 /* ct7 * Added DeleteLocalRef */

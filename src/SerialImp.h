@@ -136,6 +136,11 @@ struct event_info_struct
 	fd_set rfds;
 	struct timeval tv_sleep;
 	int closing;
+
+	//added by Cardon
+	//HANDLE readInterruptEvent;
+	//HANDLE monitorInterruptEvent;
+
 #if !defined(TIOCSERGETLSR) && !defined(WIN32)
 	int writing;
 	int output_buffer_empty_flag;

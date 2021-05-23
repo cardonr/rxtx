@@ -74,6 +74,7 @@ extern void report_error( char * );
  * winsock has FIONREAD with lcc
  */
 
+
 #ifdef __LCC__
 #	include <winsock.h>
 #else
@@ -83,7 +84,21 @@ extern void report_error( char * );
 #define SIGIO 0
 
 int my_errno;
-extern int errno;
+
+//CARDON
+//extern int errno;
+
+
+//cardon
+#define MAXLEN 255
+
+#ifdef DEBUG_VERBOSE
+
+char message[MAXLEN + 1];
+#endif /* DEBUG_VERBOSE*/
+
+
+
 struct termios_list
 {
 	char filename[80];
@@ -102,9 +117,33 @@ struct termios_list
 	OVERLAPPED rol;
 	OVERLAPPED wol;
 	OVERLAPPED sol;
+	HANDLE readInterruptEvent; //added by Cardon
+	HANDLE monitorInterruptEvent; //added by Cardon
+	int readOngoing; //added by Cardon. Is true when a read is busy (the event handle can't be freed).
+	int waitingCommEvent; //added by Cardon. Is true when waiting for comm event (the event handle can't be freed).
+	int is_closing; //added by Cardon. Is true when serial_close was called.
+
 	int fd;
 	struct termios_list *next;
 	struct termios_list *prev;
+
+	
+	/*
+
+
+	//FREE
+		//added by Cardon
+	if (eis->readInterruptEvent) {
+		CloseHandle(eis->readInterruptEvent);
+	}
+	if (eis->monitorInterruptEvent) {
+		CloseHandle(eis->monitorInterruptEvent);
+	}
+
+
+
+	*/
+
 };
 struct termios_list *first_tl = NULL;
 
@@ -146,10 +185,16 @@ void termios_setflags( int fd, int termios_flags[] )
 {
 	struct termios_list *index = find_port( fd );
 	int i, result;
-	int windows_flags[11] = { 0, EV_RXCHAR, EV_TXEMPTY, EV_CTS, EV_DSR,
-					EV_RING|0x2000, EV_RLSD, EV_ERR,
-					EV_ERR, EV_ERR, EV_BREAK
-				};
+	//int windows_flags[11] = { 0, EV_RXCHAR, EV_TXEMPTY, EV_CTS, EV_DSR,
+	//				EV_RING|0x2000, EV_RLSD, EV_ERR,
+	//				EV_ERR, EV_ERR, EV_BREAK
+	//			};
+
+	//adapted by Cardon: no event of RX, ERR, BREAK
+	int windows_flags[11] = { 0, 0, EV_TXEMPTY, EV_CTS, EV_DSR,
+					EV_RING, EV_RLSD, 0,
+					0, 0, 0	};
+
 	if( !index )
 	{
 		LEAVE( "termios_setflags" );
@@ -159,25 +204,16 @@ void termios_setflags( int fd, int termios_flags[] )
 	for(i=0;i<11;i++)
 		if( termios_flags[i] )
 			index->event_flag |= windows_flags[i];
+	
+	
+	//make sure the following event are not tracked
+	index->event_flag &= ~EV_BREAK;
+	index->event_flag &= ~EV_ERR;
+	index->event_flag &= ~EV_RXCHAR;
+	index->event_flag &= ~EV_RXFLAG;
+
 	result = SetCommMask( index->hComm, index->event_flag );
-	/*
-	   This is rank.  0x2000 was used to detect the trailing edge of ring.
-	   The leading edge is detedted by EV_RING.
-
-	   The trailing edge is reliable.  The leading edge is not.
-	   Softie no longer allows the trailing edge to be detected in NTsp2
-	   and beyond.
-
-	   So... Try the reliable option above and if it fails, use the less
-	   reliable means.
-
-	   The screams for a giveio solution that bypasses the kernel.
-	*/
-	if( index->event_flag & 0x2000 && result == 0 )
-	{
-		index->event_flag &= ~0x2000;
-		SetCommMask( index->hComm, index->event_flag );
-	}
+	
 }
 
 /*----------------------------------------------------------
@@ -501,7 +537,7 @@ ClearErrors()
    comments:
 ----------------------------------------------------------*/
 
-int ClearErrors( struct termios_list *index, COMSTAT *Stat )
+int ClearErrors( struct termios_list *index, COMSTAT *Stat , int *errNum)
 {
 	unsigned long ErrCode;
 	int ret;
@@ -531,6 +567,7 @@ int ClearErrors( struct termios_list *index, COMSTAT *Stat )
 	if( ErrCode & CE_FRAME )
 	{
 		index->sis->frame++;
+		*errNum = E_CUSTOM_SERIAL_FRAME;
 		ErrCode &= ~CE_FRAME;
 	}
 #ifdef LIFE_IS_GOOD
@@ -550,72 +587,75 @@ int ClearErrors( struct termios_list *index, COMSTAT *Stat )
 	if( ErrCode & CE_RXPARITY )
 	{
 		index->sis->parity++;
+		*errNum = E_CUSTOM_SERIAL_RX_PARITY;
 		ErrCode &= ~CE_RXPARITY;
 	}
 	if( ErrCode & CE_BREAK )
 	{
 		index->sis->brk++;
+		*errNum = E_CUSTOM_SERIAL_BREAK;
 		ErrCode &= ~CE_BREAK;
 	}
 	return( ret );
 }
-
-/*----------------------------------------------------------
-FillDCB()
-
-   accept:
-   perform:
-   return:
-   exceptions:
-   win32api:     GetCommState(),  SetCommState(), SetCommTimeouts()
-   comments:
-----------------------------------------------------------*/
-
-BOOL FillDCB( DCB *dcb, unsigned long *hCommPort, COMMTIMEOUTS Timeout )
-{
-
-	ENTER( "FillDCB" );
-	dcb->DCBlength = sizeof( dcb );
-	if ( !GetCommState( hCommPort, dcb ) )
-	{
-		report( "GetCommState\n" );
-		return( -1 );
-	}
-	dcb->BaudRate        = CBR_9600 ;
-	dcb->ByteSize        = 8;
-	dcb->Parity          = NOPARITY;
-	dcb->StopBits        = ONESTOPBIT;
-	dcb->fDtrControl     = DTR_CONTROL_ENABLE;
-	dcb->fRtsControl     = RTS_CONTROL_ENABLE;
-	dcb->fOutxCtsFlow    = FALSE;
-	dcb->fOutxDsrFlow    = FALSE;
-	dcb->fDsrSensitivity = FALSE;
-	dcb->fOutX           = FALSE;
-	dcb->fInX            = FALSE;
-	dcb->fTXContinueOnXoff = FALSE;
-	dcb->XonChar         = 0x11;
-	dcb->XoffChar        = 0x13;
-	dcb->XonLim          = 0;
-	dcb->XoffLim         = 0;
-	dcb->fParity = TRUE;
-	if ( EV_BREAK|EV_CTS|EV_DSR|EV_ERR|EV_RING|( EV_RLSD & EV_RXFLAG ) )
-		dcb->EvtChar = '\n';
-	else dcb->EvtChar = '\0';
-	if ( !SetCommState( hCommPort, dcb ) )
-	{
-		report( "SetCommState\n" );
-		YACK();
-		return( -1 );
-	}
-	if ( !SetCommTimeouts( hCommPort, &Timeout ) )
-	{
-		YACK();
-		report( "SetCommTimeouts\n" );
-		return( -1 );
-	}
-	LEAVE( "FillDCB" );
-	return ( TRUE ) ;
-}
+// CARDON note: FillDCB is not used anymore
+//
+///*----------------------------------------------------------
+//FillDCB()
+//
+//   accept:
+//   perform:
+//   return:
+//   exceptions:
+//   win32api:     GetCommState(),  SetCommState(), SetCommTimeouts()
+//   comments:
+//----------------------------------------------------------*/
+//
+//BOOL FillDCB( DCB *dcb, unsigned long *hCommPort, COMMTIMEOUTS Timeout )
+//{
+//
+//	ENTER( "FillDCB" );
+//	dcb->DCBlength = sizeof( dcb );
+//	if ( !GetCommState( hCommPort, dcb ) )
+//	{
+//		report( "GetCommState\n" );
+//		return( -1 );
+//	}
+//	dcb->BaudRate        = CBR_9600 ;
+//	dcb->ByteSize        = 8;
+//	dcb->Parity          = NOPARITY;
+//	dcb->StopBits        = ONESTOPBIT;
+//	dcb->fDtrControl     = DTR_CONTROL_ENABLE;
+//	dcb->fRtsControl     = RTS_CONTROL_ENABLE;
+//	dcb->fOutxCtsFlow    = FALSE;
+//	dcb->fOutxDsrFlow    = FALSE;
+//	dcb->fDsrSensitivity = FALSE;
+//	dcb->fOutX           = FALSE;
+//	dcb->fInX            = FALSE;
+//	dcb->fTXContinueOnXoff = FALSE;
+//	dcb->XonChar         = 0x11;
+//	dcb->XoffChar        = 0x13;
+//	dcb->XonLim          = 0;
+//	dcb->XoffLim         = 0;
+//	dcb->fParity = TRUE;
+//	if ( EV_BREAK|EV_CTS|EV_DSR|EV_ERR|EV_RING|( EV_RLSD & EV_RXFLAG ) )
+//		dcb->EvtChar = '\n';
+//	else dcb->EvtChar = '\0';
+//	if ( !SetCommState( hCommPort, dcb ) )
+//	{
+//		report( "SetCommState\n" );
+//		YACK();
+//		return( -1 );
+//	}
+//	if ( !SetCommTimeouts( hCommPort, &Timeout ) )
+//	{
+//		YACK();
+//		report( "SetCommTimeouts\n" );
+//		return( -1 );
+//	}
+//	LEAVE( "FillDCB" );
+//	return ( TRUE ) ;
+//}
 
 /*----------------------------------------------------------
 serial_close()
@@ -644,6 +684,22 @@ int serial_close( int fd )
 	{
 		LEAVE( "serial_close" );
 		return -1;
+	}
+	if (!SetEvent(index->readInterruptEvent))
+	{
+		sprintf(message, "SetEvent failed (%d)\n", GetLastError());
+		report(message);
+	}
+	//wait for any remaining read actions (yes, we use a loop here to keep it simple), so we can free the HANDLE
+	int counter = 0;
+	index->is_closing = 1;
+	while (index->readOngoing && counter < 100) {
+		usleep(10000); //10 ms
+		counter++; //the counter is a wacthdog in case we forgot to set readOngoing=0 when exiting the read function
+	}
+	while (index->waitingCommEvent && counter < 100) {
+		usleep(10000); //10 ms
+		counter++; //the counter is a wacthdog in case we forgot to set readOngoing=0 when exiting the read function
 	}
 
 	/* WaitForSingleObject( index->wol.hEvent, INFINITE ); */
@@ -693,6 +749,15 @@ int serial_close( int fd )
 		/* had problems with strdup
 		if ( index->filename ) free( index->filename );
 		*/
+		//added by cardon
+		if (index->readInterruptEvent) {
+			CloseHandle(index->readInterruptEvent);
+		}
+		if (index->monitorInterruptEvent) {
+			CloseHandle(index->monitorInterruptEvent);
+		}
+
+
 		free( index );
 	}
 	LEAVE( "serial_close" );
@@ -806,7 +871,7 @@ BOOL init_termios(struct termios *ttyset )
 	ttyset->c_cc[VEOF] = 0x04;	/* 4: C-d */
 	ttyset->c_cc[VTIME] = 0;	/* 5: read timeout */
 	ttyset->c_cc[VMIN] = 1;		/* 6: read returns after this
-						many bytes */
+						many bytes */ 
 	ttyset->c_cc[VSUSP] = 0x1a;	/* 10: C-z */
 	ttyset->c_cc[VEOL] = '\r';	/* 11: */
 	ttyset->c_cc[VREPRINT] = 0x12;	/* 12: C-r */
@@ -926,6 +991,20 @@ int open_port( struct termios_list *port )
 		report( "Could not create write overlapped\n" );
 		goto fail;
 	}
+
+	//added by Cardon
+	port->readInterruptEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	if (!port->readInterruptEvent) {
+		report("Could not create readInterruptEvent\n");
+		goto fail;
+	}
+	port->monitorInterruptEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	if (!port->monitorInterruptEvent) {
+		report("Could not create monitorInterruptEvent\n");
+		goto fail;
+	}
+
+
 	LEAVE( "open_port" );
 	return( 0 );
 fail:
@@ -1307,7 +1386,7 @@ int serial_write( int fd, char *Str, int length )
 			report( "serial_write error\n" );
 			/* report("Condition 1 Detected in write()\n"); */
 			YACK();
-			errno = EIO;
+			errno = EIO; //Input output error
 			nBytes=-1;
 			goto end;
 		}
@@ -1319,7 +1398,7 @@ int serial_write( int fd, char *Str, int length )
 			{
 				/* report("Condition 2 Detected in write()\n"); */
 				YACK();
-				errno = EIO;
+				errno = EIO; //Input output error
 				nBytes = -1;
 				goto end;
 				/* ClearErrors( index, &Stat ); */
@@ -1356,6 +1435,9 @@ serial_read()
                   GetOverLappedResult()
    comments:    If setting errno make sure not to use EWOULDBLOCK
                 In that case use EAGAIN.  See SerialImp.c:testRead()
+
+Comment of Cardon:
+	return -1 on error, see https://man7.org/linux/man-pages/man2/read.2.html
 ----------------------------------------------------------*/
 
 int serial_read( int fd, void *vb, int size )
@@ -1369,6 +1451,11 @@ int serial_read( int fd, void *vb, int size )
 	COMSTAT stat;
 	clock_t c;
 	unsigned char *dest = vb;
+
+	//added by Cardon
+	HANDLE ghEvents[2]; //array that contains both events 
+	
+
 
 	start = GetTickCount();
 	ENTER( "serial_read" );
@@ -1391,122 +1478,257 @@ int serial_read( int fd, void *vb, int size )
 	   FIXME: INLCR: convert \n to \r
 	*/
 
-	if ( index->open_flags & O_NONBLOCK  )
-	{
-		int ret;
-		vmin = 0;
-		/* pull mucho-cpu here? */
-		do {
-#ifdef DEBUG_VERBOSE
-			report( "vmin=0\n" );
-#endif /* DEBUG_VERBOSE */
-			ret = ClearErrors( index, &stat);
-			/* we should use -1 instead of 0 for disabled timeout */
-			now = GetTickCount();
-			if ( index->ttyset->c_cc[VTIME] &&
-				now-start >= (index->ttyset->c_cc[VTIME]*100)) {
-/*
-				sprintf( message, "now = %i start = %i time = %i total =%i\n", now, start, index->ttyset->c_cc[VTIME]*100, total);
-				report( message );
-*/
-				return total;	/* read timeout */
-			}
-		} while( stat.cbInQue < size && size > 1 );
-	}
-	else
-	{
-		/* VTIME is in units of 0.1 seconds */
 
-#ifdef DEBUG_VERBOSE
-		report( "vmin!=0\n" );
-#endif /* DEBUG_VERBOSE */
-		vmin = index->ttyset->c_cc[VMIN];
+// COMMENTED BY CARDON
+//	
+//	if ( index->open_flags & O_NONBLOCK  )
+//	{
+//		int ret;
+//		vmin = 0;
+//		/* pull mucho-cpu here? */
+//		do {
+//#ifdef DEBUG_VERBOSE
+//			report( "vmin=0\n" );
+//#endif /* DEBUG_VERBOSE */
+//			ret = ClearErrors( index, &stat);
+//			/* we should use -1 instead of 0 for disabled timeout */
+//			now = GetTickCount();
+//			if ( index->ttyset->c_cc[VTIME] &&
+//				now-start >= (index->ttyset->c_cc[VTIME]*100)) {
+///*
+//				sprintf( message, "now = %i start = %i time = %i total =%i\n", now, start, index->ttyset->c_cc[VTIME]*100, total);
+//				report( message );
+//*/
+//				return total;	/* read timeout */
+//			}
+//		} while( stat.cbInQue < size && size > 1 );
+//	}
+//	else
+//	{
+//		/* VTIME is in units of 0.1 seconds */
+//
+//#ifdef DEBUG_VERBOSE
+//		report( "vmin!=0\n" );
+//#endif /* DEBUG_VERBOSE */
+//		vmin = index->ttyset->c_cc[VMIN];
+//
+//		c = clock() + index->ttyset->c_cc[VTIME] * CLOCKS_PER_SEC / 10;
+//		do {
+//			error = ClearErrors( index, &stat);
+//			usleep(1000);
+//		} while ( c > clock() );
+//
+//	}
 
-		c = clock() + index->ttyset->c_cc[VTIME] * CLOCKS_PER_SEC / 10;
-		do {
-			error = ClearErrors( index, &stat);
-			usleep(1000);
-		} while ( c > clock() );
 
+	//added by cardon
+	//fill events to wait
+	ghEvents[0] = index->rol.hEvent;
+	ghEvents[1] = index->readInterruptEvent;
+	index->readOngoing = 1;
+
+	if (index->is_closing) {
+		index->readOngoing = 0;
+		//errno == EINTR;
+		LEAVE("serial_read");
+		return 0;
 	}
 
 	total = 0;
-	while ( size > 0 )
+	while ( 1 )  //Cardon: loop with a high timeout set with SetCommTimeouts
 	{
 		nBytes = 0;
-		/* ret = ClearErrors( index, &stat); */
-
 		index->rol.Offset = index->rol.OffsetHigh = 0;
 		ResetEvent( index->rol.hEvent );
-
-		err = ReadFile( index->hComm, dest + total, size, &nBytes, &index->rol );
-#ifdef DEBUG_VERBOSE
-	/* warning Roy Rogers! */
-		sprintf(message, " ========== ReadFile = %i %s\n",
-			( int ) nBytes, (char *) dest + total );
-		report( message );
-#endif /* DEBUG_VERBOSE */
-		size -= nBytes;
-		total += nBytes;
-
-		if ( !err )
-		{
-			switch ( GetLastError() )
-			{
+		
+		if (ReadFile(index->hComm, dest + total, size, &nBytes, &index->rol)) {
+			// read completed immediately
+			size -= nBytes;
+			total += nBytes;
+			index->readOngoing = 0;
+			LEAVE("serial_read");
+			return total;
+		} else {
+			switch ( GetLastError() ){
 				case ERROR_BROKEN_PIPE:
 					report( "ERROR_BROKEN_PIPE\n ");
-					nBytes = 0;
-					break;
+					index->readOngoing = 0;
+					LEAVE("serial_read");
+					return -1;
+
 				case ERROR_MORE_DATA:
-					report( "ERROR_MORE_DATA\n" );
-					break;
-				case ERROR_IO_PENDING:
-					while( ! GetOverlappedResult(
-							index->hComm,
-							&index->rol,
-							&nBytes,
-							TRUE ) )
-					{
-						if( GetLastError() !=
-							ERROR_IO_INCOMPLETE )
-						{
-							ClearErrors(
-								index,
-								&stat);
-							return( total );
-						}
-					}
+					report( "ERROR_MORE_DATA: More data can be read.\n" );
+					//more data can be read. no worry.
 					size -= nBytes;
 					total += nBytes;
-					if (size > 0) {
-						now = GetTickCount();
-						sprintf(message, "size > 0: spent=%ld have=%d\n", now-start, index->ttyset->c_cc[VTIME]*100);
-						report( message );
-						/* we should use -1 for disabled
-						   timouts */
-						if ( index->ttyset->c_cc[VTIME] && now-start >= (index->ttyset->c_cc[VTIME]*100)) {
-							report( "TO " );
-							/* read timeout */
+					index->readOngoing = 0;
+					LEAVE("serial_read");
+					return total;
+
+				case ERROR_IO_PENDING:
+					DWORD dwRes;
+					dwRes = WaitForMultipleObjects(
+						2, // number of objects in array 
+						ghEvents, //array of objects 
+						FALSE, //wait for any object
+						INFINITE); //wait for ever
+					switch (dwRes) {
+							// ghEvents[0] was signaled (the read operation completed)
+						case WAIT_OBJECT_0 + 0:
+							if (!GetOverlappedResult(
+								index->hComm,
+								&index->rol,
+								&nBytes,
+								FALSE  // don't wait
+							)) {
+								// Error in communications; report it.
+								DWORD lastError = GetLastError();
+								if (lastError =
+									ERROR_IO_INCOMPLETE) {
+									//the operation is not completed. (timeout), loop
+									break;
+								} else {
+									
+									int errNum = 0;
+									//clear errors
+									ClearErrors(
+										index,
+										&stat, 
+										&errNum);
+									//FIX ME: get type of error 
+									sprintf(message, "serial_read error. Last-error code: %d\n", lastError);
+									report(message);
+									YACK();
+									errno = EIO;
+									if (errNum > 0) {
+										errno = errNum;
+									}
+									index->readOngoing = 0;
+									LEAVE("serial_read");
+									return -1;
+								}
+							}
+							size -= nBytes;
+							total += nBytes;
+							sprintf(message, "serial_read:number of bytes read=%d\n", nBytes);
+							report(message);
+							index->readOngoing = 0;
+							LEAVE("serial_read");
 							return total;
-						}
+	
+						// ghEvents[1] was signaled (the read operation is interrupted // returns 0 byte - no error)
+						case WAIT_OBJECT_0 + 1:
+							sprintf(message, "serial_read:read was interrupted.\n");
+							report(message);
+							index->readOngoing = 0;
+							LEAVE("serial_read");
+							//errno == EINTR;
+							return 0;
+
+						case WAIT_TIMEOUT:
+							//should not happen because we set INFINITE. Ignore
+							sprintf(message, "serial_read:unexpected wait timeout.\n");
+							report(message);
+							index->readOngoing = 0;
+							LEAVE("serial_read");
+							return -1;
+
+						default:
+							// Error in the WaitForMultipleObjects; abort.
+							sprintf(message, "serial_read:Error in the WaitForMultipleObjects;.\n");
+							report(message);
+							index->readOngoing = 0;
+							LEAVE("serial_read");
+							return -1;
 					}
-					sprintf(message, "end nBytes=%ld] ", nBytes);
-					report( message );
-					report( "ERROR_IO_PENDING\n" );
-					break;
-				default:
-					YACK();
-					return -1;
 			}
 		}
-		else
-		{
-			ClearErrors( index, &stat);
-			return( total );
-		}
 	}
-	LEAVE( "serial_read" );
-	return total;
+
+
+
+//backup of original code:
+
+//	total = 0;
+//	while (size > 0)
+//	{
+//		nBytes = 0;
+//		/* ret = ClearErrors( index, &stat); */
+//
+//		index->rol.Offset = index->rol.OffsetHigh = 0;
+//		ResetEvent(index->rol.hEvent);
+//
+//		err = ReadFile(index->hComm, dest + total, size, &nBytes, &index->rol);
+//
+//#ifdef DEBUG_VERBOSE
+//		/* warning Roy Rogers! */
+//		sprintf(message, " ========== ReadFile = %i %s\n",
+//			(int)nBytes, (char*)dest + total);
+//		report(message);
+//#endif /* DEBUG_VERBOSE */
+//		size -= nBytes;
+//		total += nBytes;
+//
+//		if (!err)
+//		{
+//			switch (GetLastError())
+//			{
+//			case ERROR_BROKEN_PIPE:
+//				report("ERROR_BROKEN_PIPE\n ");
+//				nBytes = 0;
+//				break;
+//			case ERROR_MORE_DATA:
+//				report("ERROR_MORE_DATA\n");
+//				break;
+//			case ERROR_IO_PENDING:
+//				//CARDON: add here wait multiplie, 
+//				while (!GetOverlappedResult(
+//					index->hComm,
+//					&index->rol,
+//					&nBytes,
+//					TRUE))
+//				{
+//					if (GetLastError() !=
+//						ERROR_IO_INCOMPLETE)
+//					{
+//						ClearErrors(
+//							index,
+//							&stat);
+//						return(total);
+//					}
+//				}
+//				size -= nBytes;
+//				total += nBytes;
+//				sprintf(message, "serial_read:number of bytes read=%d\n", nBytes);
+//				report(message);
+//				if (size > 0) {
+//					now = GetTickCount();
+//					sprintf(message, "size > 0: spent=%ld have=%d\n", now - start, index->ttyset->c_cc[VTIME] * 100);
+//					report(message);
+//					/* we should use -1 for disabled
+//					   timouts */
+//					if (index->ttyset->c_cc[VTIME] && now - start >= (index->ttyset->c_cc[VTIME] * 100)) {
+//						report("TO ");
+//						/* read timeout */
+//						return total;
+//					}
+//				}
+//				sprintf(message, "end nBytes=%ld] ", nBytes);
+//				report(message);
+//				report("ERROR_IO_PENDING\n");
+//				break;
+//			default:
+//				YACK();
+//				return -1;
+//			}
+//		}
+//		else
+//		{
+//			ClearErrors(index, &stat);
+//			return(total);
+//		}
+//	}
+
 }
 
 #ifdef asdf
@@ -2177,7 +2399,8 @@ int tcgetattr( int fd, struct termios *s_termios )
 		return -1;
 	}
 
-	s_termios->c_cc[VTIME] = timeouts.ReadTotalTimeoutConstant/100;
+	//ignore 
+	//s_termios->c_cc[VTIME] = timeouts.ReadTotalTimeoutConstant/100;
 /*
 	handled in SerialImp.c?
 	s_termios->c_cc[VMIN] = ?
@@ -2334,11 +2557,14 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 	dcb.fOutxDsrFlow    = FALSE;
 	/* DONT ignore rx bytes when DSR is OFF */
 	dcb.fDsrSensitivity = FALSE;
-	dcb.XonChar         = s_termios->c_cc[VSTART];
-	dcb.XoffChar        = s_termios->c_cc[VSTOP];
+	//fix by Cardon: default value if NULL
+	dcb.XonChar         = s_termios->c_cc[VSTART] ? s_termios->c_cc[VSTART]: 17;
+	dcb.XoffChar        = s_termios->c_cc[VSTOP] ?  s_termios->c_cc[VSTOP]: 19;
 	dcb.XonLim          = 0;	/* ? */
 	dcb.XoffLim         = 0;	/* ? */
 	dcb.EofChar         = s_termios->c_cc[VEOF];
+	/* //Fix my Cardon: https://docs.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-dcb
+	* //fBinary If this member is TRUE, binary mode is enabled. Windows does not support nonbinary mode transfers, so this member must be TRUE.
 	if( dcb.EofChar != '\0' )
 	{
 		dcb.fBinary = 0;
@@ -2347,10 +2573,9 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 	{
 		dcb.fBinary = 1;
 	}
-	if ( EV_BREAK|EV_CTS|EV_DSR|EV_ERR|EV_RING | ( EV_RLSD & EV_RXFLAG ) )
-		dcb.EvtChar = '\n';
-	else
-		dcb.EvtChar = '\0';
+	*/
+	dcb.fBinary = 1;
+	dcb.EvtChar = 0; // event char should be ignored by driver in binary mode
 
 	if ( !SetCommState( index->hComm, &dcb ) )
 	{
@@ -2360,28 +2585,51 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 	}
 
 #ifdef DEBUG_VERBOSE
-	sprintf( message, "VTIME:%d, VMIN:%d\n", s_termios->c_cc[VTIME],
-		s_termios->c_cc[VMIN] );
-	report( message );
+	//sprintf( message, "VTIME:%d, VMIN:%d\n", s_termios->c_cc[VTIME],
+	//	s_termios->c_cc[VMIN] );
+	//report( message );
 #endif /* DEBUG_VERBOSE */
-	vtime = s_termios->c_cc[VTIME] * 100;
-	timeouts.ReadTotalTimeoutConstant = vtime;
-	timeouts.ReadIntervalTimeout = 0;
-	timeouts.ReadTotalTimeoutMultiplier = 0;
+	
+	//CARDON: ignore VMIN and VTIME for read
+	//
+	//
+	//vtime = s_termios->c_cc[VTIME] * 100;
+	//timeouts.ReadTotalTimeoutConstant = vtime;
+	//timeouts.ReadIntervalTimeout = 0;
+	//timeouts.ReadTotalTimeoutMultiplier = 0;
 
-	timeouts.WriteTotalTimeoutConstant = vtime;
+	//timeouts.WriteTotalTimeoutConstant = vtime;
+	//timeouts.WriteTotalTimeoutMultiplier = 0;
+	///* max between bytes */
+	//if ( s_termios->c_cc[VMIN] > 0 && vtime > 0 )
+	//{
+	//	/* read blocks forever on VMIN chars */
+	//} else if ( s_termios->c_cc[VMIN] == 0 && vtime == 0 )
+	//{
+	//	/* read returns immediately */
+	//	timeouts.ReadIntervalTimeout = MAXDWORD;
+	//	timeouts.ReadTotalTimeoutConstant = 0;
+	//	timeouts.ReadTotalTimeoutMultiplier = 0;
+	//}
+
+
+	//https://docs.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-commtimeouts
+	/*If an application sets ReadIntervalTimeoutand ReadTotalTimeoutMultiplier to MAXDWORDand sets ReadTotalTimeoutConstant to a value greater than zeroand less than MAXDWORD, one of the following occurs when the ReadFile function is called :
+
+	If there are any bytes in the input buffer, ReadFile returns immediately with the bytes in the buffer.
+		If there are no bytes in the input buffer, ReadFile waits until a byte arrivesand then returns immediately.
+		If no bytes arrive within the time specified by ReadTotalTimeoutConstant, ReadFile times out. */
+
+	timeouts.ReadTotalTimeoutConstant = 0xfffffffe; // less than MAXDWORD
+	timeouts.ReadIntervalTimeout = MAXDWORD; //0xffffffff
+	timeouts.ReadTotalTimeoutMultiplier = MAXDWORD; //0xffffffff
+
+	//A value of zero for both the WriteTotalTimeoutMultiplier and WriteTotalTimeoutConstant members indicates that total time-outs are not used for write operations.
+	timeouts.WriteTotalTimeoutConstant = 0;
 	timeouts.WriteTotalTimeoutMultiplier = 0;
-	/* max between bytes */
-	if ( s_termios->c_cc[VMIN] > 0 && vtime > 0 )
-	{
-		/* read blocks forever on VMIN chars */
-	} else if ( s_termios->c_cc[VMIN] == 0 && vtime == 0 )
-	{
-		/* read returns immediately */
-		timeouts.ReadIntervalTimeout = MAXDWORD;
-		timeouts.ReadTotalTimeoutConstant = 0;
-		timeouts.ReadTotalTimeoutMultiplier = 0;
-	}
+
+
+
 #ifdef DEBUG_VERBOSE
 	sprintf( message, "ReadIntervalTimeout=%ld\n",
 		timeouts.ReadIntervalTimeout );
@@ -2439,13 +2687,13 @@ int tcsendbreak( int fd, int duration )
 	}
 
 	if ( duration <= 0 ) duration = 1;
-
+	int errNum=0;
 	if( !SetCommBreak( index->hComm ) )
-		ClearErrors( index, &Stat );
+		ClearErrors( index, &Stat, &errNum);
 	/* 0.25 seconds == 250000 usec */
 	usleep( duration * 250000 );
 	if( !ClearCommBreak( index->hComm ) )
-		ClearErrors( index, &Stat );
+		ClearErrors( index, &Stat, &errNum);
 	LEAVE( "tcsendbreak" );
 	return 1;
 }
@@ -2491,18 +2739,25 @@ int tcdrain ( int fd )
 			  Something funky is happening on NT.  GetLastError =
 			  0.
 		*/
+		
+		//cardon
 		sprintf( message,  "FlushFileBuffers() %i\n",
 			(int) GetLastError() );
-		report( message );
-		if( GetLastError() == 0 )
-		{
-			set_errno( 0 );
-			return(0);
+		report(message);
+		if (GetLastError() == 50) {
+			//flushing is not supported. ignore.
+		} else {
+
+			if (GetLastError() == 0)
+			{
+				set_errno(0);
+				return(0);
+			}
+			set_errno(EAGAIN);
+			YACK();
+			LEAVE("tcdrain");
+			return -1;
 		}
-		set_errno( EAGAIN );
-		YACK();
-		LEAVE( "tcdrain" );
-		return -1;
 	}
 /*
 	sprintf( message,  "FlushFileBuffers() %i\n",
@@ -2510,9 +2765,9 @@ int tcdrain ( int fd )
 	report( message );
 */
 	LEAVE( "tcdrain success" );
-	index->event_flag |= EV_TXEMPTY;
-	SetCommMask( index->hComm, index->event_flag );
-	index->event_flag = old_flag;
+	//index->event_flag |= EV_TXEMPTY;
+	//SetCommMask( index->hComm, index->event_flag );
+	//index->event_flag = old_flag;
 /*
 	index->tx_happened = 1;
 */
@@ -2591,9 +2846,9 @@ int tcflush( int fd, int queue_selector )
 			LEAVE( "tcflush" );
 			return -1;
 	}
-	index->event_flag |= EV_TXEMPTY;
-	SetCommMask( index->hComm, index->event_flag );
-	index->event_flag = old_flag;
+	//index->event_flag |= EV_TXEMPTY;
+	//SetCommMask( index->hComm, index->event_flag );
+	//index->event_flag = old_flag;
 	index->tx_happened = 1;
 	LEAVE( "tcflush" );
 	return( 0 );
@@ -2658,6 +2913,31 @@ int fstat( int fd, ... )
 }
 #endif
 
+
+
+//added by cardon
+/* return 1 on success, 0 if failed */
+int get_comm_status(int fd, LPDWORD lpdwModemStatus) {
+	struct termios_list* index;
+
+	if (fd <= 0) {
+		report("get_comm_status: Invalid file descriptor\n");
+		return 0;
+	}
+	index = find_port(fd);
+	if (!index){
+		report("get_comm_status: Unknown file descriptor\n");
+		return 0;
+	}
+	if (!GetCommModemStatus(index->hComm, lpdwModemStatus)){
+		report("get_comm_status: call to Win32 GetCommModemStatus failed\n");
+		return 0;
+	}
+
+	return 1;
+}
+
+
 /*----------------------------------------------------------
 ioctl()
 
@@ -2715,17 +2995,18 @@ int ioctl( int fd, int request, ... )
 	}
 
 	va_start( ap, request );
-
-	ret = ClearErrors( index, &Stat );
-	if (ret == 0)
-	{
-		set_errno( EBADFD );
-		YACK();
-		report( "ClearError Failed! ernno EBADFD" );
-		arg = va_arg( ap, int * );
-		va_end( ap );
-		return -1;
-	}
+	// COMMENTED BY Cardon
+	int errNum = 0;
+	//ret = ClearErrors( index, &Stat, &errNum );
+	//if (ret == 0)
+	//{
+	//	set_errno( EBADFD );
+	//	YACK();
+	//	report( "ClearError Failed! ernno EBADFD" );
+	//	arg = va_arg( ap, int * );
+	//	va_end( ap );
+	//	return -1;
+	//}
 	switch( request )
 	{
 		case TCSBRK:
@@ -2877,14 +3158,15 @@ int ioctl( int fd, int request, ... )
 
 #endif /* TIOCSSERIAL */
 		case TIOCSERCONFIG:
-		case TIOCSERGETLSR:
+		case TIOCSERGETLSR:  //CARDON: Gets the value of this tty device's line status register (LSR).
 			arg = va_arg( ap, int * );
 			/*
 			do {
 				wait = WaitForSingleObject( index->sol.hEvent, 5000 );
 			} while ( wait == WAIT_TIMEOUT );
 			*/
-			ret = ClearErrors( index, &Stat );
+			
+			ret = ClearErrors( index, &Stat, &errNum );
 			if ( ret == 0 )
 			{
 				/* FIXME ? */
@@ -2894,13 +3176,13 @@ int ioctl( int fd, int request, ... )
 				va_end( ap );
 				return -1;
 			}
-			if ( (int ) Stat.cbOutQue == 0 )
+			if ( (int ) Stat.cbOutQue == 0 ) //Cardon:The number of bytes of user data remaining to be transmitted for all write operations. This value will be zero for a nonoverlapped write.
 			{
 				/* output is empty */
 				if( index->tx_happened == 1 )
 				{
 					old_flag = index->event_flag;
-					index->event_flag &= ~EV_TXEMPTY;
+					index->event_flag &= ~EV_TXEMPTY; // Cardon: remove EV_TXEMPTY from the list. Why???
 					SetCommMask( index->hComm,
 						index->event_flag );
 					index->event_flag = old_flag;
@@ -2945,8 +3227,9 @@ int ioctl( int fd, int request, ... )
 		*/
 #ifdef TIOCGICOUNT
 		case TIOCGICOUNT:
+			//Cardon: the struct will be increased for errors counts
 			sistruct= va_arg( ap, struct  serial_icounter_struct * );
-			ret = ClearErrors( index, &Stat );
+			ret = ClearErrors( index, &Stat, &errNum ); //Cardon: this counts error
 			if ( ret == 0 )
 			{
 				/* FIXME ? */
@@ -2996,7 +3279,7 @@ int ioctl( int fd, int request, ... )
 		/*  number of bytes available for reading */
 		case FIONREAD:
 			arg = va_arg( ap, int * );
-			ret = ClearErrors( index, &Stat );
+			ret = ClearErrors( index, &Stat, &errNum );
 			if ( ret == 0 )
 			{
 				/* FIXME ? */
@@ -3118,6 +3401,14 @@ void termios_interrupt_event_loop( int fd, int flag )
 	tcdrain( index->fd );
 	SetEvent( index->sol.hEvent );
 */
+
+	//added by cardon
+	if (!SetEvent(index->monitorInterruptEvent))
+	{
+		sprintf(message, "termios_interrupt_event_loop: SetEvent failed (%d)\n", GetLastError());
+		report(message);
+	}
+
 	index->interrupt = flag;
 	return;
 }
@@ -3127,33 +3418,36 @@ Serial_select()
 
    accept:
    perform:
-   return:      number of fd's changed on success or -1 on error.
+   return:      1 on success or 0 on error.
    exceptions:
-   win32api:    SetCommMask(), GetCommEvent(), WaitSingleObject()
+   win32api:    SetCommMask(), GetCommEvent(), 
    comments:
 ----------------------------------------------------------*/
 #ifndef __LCC__
-int  serial_select( int  n,  fd_set  *readfds,  fd_set  *writefds,
-			fd_set *exceptfds, struct timeval *timeout )
+int serial_wait_comm_event( int  fd, LPDWORD pdwCommEvent)
 {
 
-	unsigned long dwCommEvent, wait = WAIT_TIMEOUT;
-	int fd = n-1;
+	//unsigned long  wait = WAIT_TIMEOUT;
 	struct termios_list *index;
 	char message[80];
 	COMSTAT Stat;
 	int ret;
 
-	ENTER( "serial_select" );
-	if ( fd <= 0 )
+	//added by Cardon
+	HANDLE ghEvents[2];
+
+	ENTER( "serial_wait_comm_event" );
+	if (!fd)
 	{
 		/*  Baby did a bad baad thing */
+		report("serial_wait_comm_event: bad fd value\n");
 		goto fail;
 	}
 
 	index = find_port( fd );
-	if ( !index || !index->event_flag )
-	{
+	//if ( !index || !index->event_flag )
+	if ( !index) 
+		{
 		/* still setting up the port? hold off for a Sec so
 		   things can fire up
 
@@ -3161,65 +3455,129 @@ int  serial_select( int  n,  fd_set  *readfds,  fd_set  *writefds,
 		   usleep(1000000)
 		*/
 		usleep(10000);
+		report("serial_wait_comm_event: bad index value\n");
 		return(0);
 	}
 
-	ResetEvent( index->wol.hEvent );
+
+	ghEvents[0] = index->sol.hEvent;
+	ghEvents[1] = index->monitorInterruptEvent;
+	index->waitingCommEvent = 1;
+
+
+	//ResetEvent( index->wol.hEvent );
 	ResetEvent( index->sol.hEvent );
-	ResetEvent( index->rol.hEvent );
-	ret = ClearErrors( index, &Stat );
-	if (ret == 0) goto fail;
-	while ( wait == WAIT_TIMEOUT && index->sol.hEvent )
-	{
-		if( index->interrupt == 1 )
+	//ResetEvent( index->rol.hEvent );
+	//ret = ClearErrors( index, &Stat );
+	//if (ret == 0) goto fail;
+	
+	//while ( wait == WAIT_TIMEOUT && index->sol.hEvent )
+	//{
+		if( index->interrupt == 1 || index->is_closing)
 		{
+			report("serial_wait_comm_event: is closing or interrupted\n");
 			goto fail;
 		}
-		SetCommMask( index->hComm, index->event_flag );
-		ClearErrors( index, &Stat );
-		if ( !WaitCommEvent( index->hComm, &dwCommEvent,
+
+		int event_flag = index->event_flag;
+		//make sure the following event are not tracked
+		event_flag &= ~EV_BREAK;
+		event_flag &= ~EV_ERR;
+		event_flag &= ~EV_RXCHAR;
+		event_flag &= ~EV_RXFLAG;
+
+		SetCommMask( index->hComm, event_flag);
+
+		//ClearErrors( index, &Stat );
+		if ( !WaitCommEvent( index->hComm, pdwCommEvent,
 			&index->sol ) )
 		{
 			/* WaitCommEvent failed probably overlapped though */
 			if ( GetLastError() != ERROR_IO_PENDING )
 			{
-				ClearErrors( index, &Stat );
+				//ClearErrors( index, &Stat );
+				report("serial_wait_comm_event: WaitCommEvent failed (no IO PENDING)\n");
 				goto fail;
 			}
 			/* thought so... */
 		}
+		else {
+			//returned immediately
+			//report status here
+
+
+		}
 		/*  could use the select timeout here but it should not
 		    be needed
 		*/
-		ClearErrors( index, &Stat );
-		wait = WaitForSingleObject( index->sol.hEvent, 100 );
-		switch ( wait )
-		{
-			case WAIT_OBJECT_0:
+		//ClearErrors( index, &Stat );
+		DWORD dwRes;
+		dwRes = WaitForMultipleObjects(
+			2, // number of objects in array 
+			ghEvents, //array of objects 
+			FALSE, //wait for any object
+			INFINITE); //wait for ever
+
+		DWORD dwOvRes; //number of bytes returned;
+
+		switch (dwRes)
+		{// ghEvents[0] was signaled (the wait operation completed)
+			case WAIT_OBJECT_0 + 0:
+				if (!GetOverlappedResult(index->hComm, &index->sol, &dwOvRes, FALSE)) {
+					// An error occurred in the overlapped operation;
+					// call GetLastError to find out what it was
+					// and abort if it is fatal.
+					DWORD lastError = GetLastError();
+					if (lastError = ERROR_IO_INCOMPLETE) {
+						//the operation is not completed. (timeout)
+						goto timeout;
+					}
+					else {
+						sprintf(message, "serial_read error. Last-error code: %d\n", lastError);
+						report(message);
+						goto fail;
+					}
+				} 
+				// Status event is stored in the event flag
+				// specified in the original WaitCommEvent call.
+				// Deal with the status event as appropriate.
+				//ReportStatusEvent(dwCommEvent); // See https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-waitcommevent
 				goto end;
+				
+				// ghEvents[1] was signaled (the read operation is interrupted // returns 0 byte - no error)
+			case WAIT_OBJECT_0 + 1:
+				sprintf(message, "serial_select:wait for COM event was interrupted.\n");
+				report(message);
+				goto interrupt;
 			case WAIT_TIMEOUT:
+				//should not appear
 				goto timeout;
 			case WAIT_ABANDONED:
 			default:
 				goto fail;
 
 		}
-	}
+	//}
 end:
-	/*  You may want to chop this out for lower latency */
-	usleep(1000);
-	LEAVE( "serial_select" );
+	index->waitingCommEvent = 0;
+	LEAVE( "serial_wait_comm_event" );
+	return( 1 );
+interrupt:
+	index->waitingCommEvent = 0;
+	LEAVE("serial_wait_comm_event");
 	return( 1 );
 timeout:
-	LEAVE( "serial_select" );
+	index->waitingCommEvent = 0;
+	LEAVE( "serial_wait_comm_event" );
 	return( 0 );
 fail:
+	index->waitingCommEvent = 0;
 	YACK();
-	sprintf( message, "< select called error %i\n", n );
+	sprintf( message, "< select called error in file desriptor %i\n", fd );
 	report( message );
 	errno = EBADFD;
-	LEAVE( "serial_select" );
-	return( 1 );
+	LEAVE( "serial_wait_comm_event" );
+	return( 0 );
 }
 #ifdef asdf
 int  serial_select( int  n,  fd_set  *readfds,  fd_set  *writefds,
@@ -3259,7 +3617,7 @@ int  serial_select( int  n,  fd_set  *readfds,  fd_set  *writefds,
 		{
 			goto end;
 		}
-		if( !index->sol.hEvent )
+		if( !index->sol.hEvent )f
 		{
 			return 1;
 		}

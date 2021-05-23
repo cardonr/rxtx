@@ -1,7 +1,10 @@
-This is AUTHORS Sun Nov 18 09:29:52 MST 2007
+AUTHORS
 
 This package is not the result of one persons time.  Recognition is given
 to the following people for their assistance.
+
+
+Rodolphe Cardon <cardon dot rodolphe at gmail dot com> Has added support for Citrix (Windows only)
 
 Martin Oberhuber <martin.oberhuber@windriver.com> Has submitted several fixes for rxtx integration into Eclipse.
 
