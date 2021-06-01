@@ -4352,7 +4352,7 @@ RXTXVersion.nativeGetVersion
 JNIEXPORT jstring JNICALL RXTXVersion(nativeGetVersion) (JNIEnv *env,
 	jclass jclazz )
 {
-	return (*env)->NewStringUTF( env, "RXTX-github-cardonr-2.2-pre1" );
+	return (*env)->NewStringUTF( env, "RXTX-github-cardonr-2.2-pre2" );
 }
 
 /*----------------------------------------------------------

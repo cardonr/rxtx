@@ -3,7 +3,7 @@ README of RXTX fork on https://github.com/cardonr/rxtx
 rxtx replaces the entire Java Communications API (CommAPI).  Every effort is made to conform to CommAPI but the package name has been moved from javax.comm to gnu.io.  
 See https://www.oracle.com/java/technologies/java-communications-api.html
 
-This fork (https://github.com/cardonr/rxtx) is a initiative to make RXTX compatible with Citrix Virtual Desktops: the original RXTX library has performance issue preventing the use serial port redirection with Citrix Remote Apps and Desktops. An example of application based on RXTX is ULTRA (formerly Prologic) CARDS.
+This fork (https://github.com/cardonr/rxtx) is a initiative to make RXTX compatible with Citrix Virtual Apps and Desktops: the original RXTX library has performance issue preventing the use  of serial port redirection with Citrix Virtual Apps and Desktops. An example of application based on RXTX is Ultra Prologic CARDS.
 
 Current status: beta (working) version. 
 
@@ -14,27 +14,27 @@ We replaced polling by event based programming. This not only improves the perfo
 To analyze which Win32 API calls are done by any program, we suggest the use Rohitab API Monitor
 http://www.rohitab.com/apimonitor
 
-Compared to the original rxtx, this fork has a limited subset of functionalities:
+Compared to the original RXTX, this fork has a limited subset of functionalities:
 - only Windows is supported (removed support for Unix and MacOS)
 - only serial port is supported (removed support for parallel port, RS485, I2C, ...)
-- receive threshold, receive timeout, and receive framing are not supported. For input stream, the default Java behavior is implemeted: attempt to read at least one byte (in other words, a read blocks until at least one byte is read.)
-- build process based on Microsoft Visual Studio  2019 (or Build Tools for Visual Studio 2019)
+- receive threshold, receive timeout, and receive framing are not supported. For input stream, the default Java behavior is implemented: attempt to read at least one byte (a read blocks until at least one byte is read.)
+- build process based on Microsoft Visual Studio 2019 (or Build Tools for Visual Studio 2019)
 - support for JDK 1.8 (previous versions are not supported anymore)
 - Add support for DLL loading using JNLPAppletLauncher (required for backward compatibility with the CARDS application that uses a modified version of RXTX). See https://jogamp.org/applet-launcher/www/
 
 This library is provided as it, without any warranty.
 If you want to report any bug or suggestion, please send an email to cardon dot rodolphe at gmail dot com.
-For commercial support of this fork, I suggest you to contact the Elegio S.A. company (https://www.elegio.eu/) having a strong expercience in such projects.
-Note that Elegio S.A. is not responsible for the content of the present fork.
+For commercial support of this fork, I suggest you to contact the company IDS4U (https://www.ids4u.be/) having a strong experience in such projects.
+Note that IDS4U is not responsible for the content of the present fork.
 
 TO DO:
 - remove print of debugging data to output stream or error stream
 - disable debugging parameters by default
 - replace printf by sprintf (to prevent buffer overflow)
-- remove the use of termios interface completely (it was a bad idea to make an implementation of Windows based on termios: the API of Windows is completely different; using a bridge for termios increase the complexity and risk of bugs.)
+- remove the use of termios interface (it was a bad idea to make an implementation of Windows based on termios: the API of Windows is completely different; using a bridge for termios increase the complexity and risk of bugs.)
 - remove unused code for better readability
-- check and fix error handling. Ensure errors are correctly throws from C code to Java, and exploitable by the application.
-- make ThreadedBufferedInputStream resilient to IO error: error should be reported in the error stream (but for a limited number to avoid flooding the console) and ignored with a sleep time (doesn't throw an exception), assuming that the consuming application is controlling the integrity of the data.
+- check and fix error handling. Ensure errors are correctly thrown from C code to Java, and exploitable by the application.
+- make ThreadedBufferedInputStream resilient to IO error: error should be reported in the error stream (but limit the number of logged errors to avoid flooding the console) and should be ignored with a sleep time (doesn't throw an exception), assuming that the consuming application is controlling the integrity of the data.
 
 See Also:
 INSTALL:   build and install instructions

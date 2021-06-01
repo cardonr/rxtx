@@ -78,7 +78,7 @@ public class RXTXVersion
 		Load.rxtx();
 
 		//Version = "RXTX-2.2pre2";
-                Version = "RXTX-github-cardonr-2.2-pre1";
+                Version = "RXTX-github-cardonr-2.2-pre2";
 	}
 	/**
 	*  static method to return the current version of RXTX

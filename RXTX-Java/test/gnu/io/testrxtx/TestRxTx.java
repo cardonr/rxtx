@@ -84,7 +84,7 @@ public class TestRxTx {
        try{
            
            //add sleep time here if you want to start API monitor manually on the java VM executable
-           Thread.sleep(10000);
+           //Thread.sleep(10000);
             
             System.setProperty ("gnu.io.log.mode", "PRINT_MODE"); //Zystem
             
