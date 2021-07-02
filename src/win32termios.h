@@ -76,8 +76,8 @@
 #define LEAVE2(x,y) printToJavaError2(x, "Leaving "y"");
 #else
 #define ENTER(x)
-#define ENTER2(x)
-#define LEAVE(x,y)
+#define ENTER2(x,y)
+#define LEAVE(x)
 #define LEAVE2(x,y)
 #endif /* TRACE */
 
