@@ -152,6 +152,8 @@ struct event_info_struct
 #endif /* TIOCGICOUNT */
 };
 
+
+
 /*  Ports known on the OS */
 #if defined(__linux__) || defined(__FreeBSD_kernel__) || defined(__GNU__)
 /*
@@ -409,8 +411,9 @@ printf("%8li sec : %8li usec\n", enow.tv_sec - snow.tv_sec, enow.tv_sec - snow.t
 #endif /* UUCP */
 
 /* java exception class names */
-/* define UNSUPPORTED_COMM_OPERATION "gnu/io/UnsupportedCommOperationException" */
-#define UNSUPPORTED_COMM_OPERATION "UnsupportedCommOperationException"
+//fixed by Cardon: 
+#define UNSUPPORTED_COMM_OPERATION "gnu/io/UnsupportedCommOperationException"
+//#define UNSUPPORTED_COMM_OPERATION "UnsupportedCommOperationException"
 #define ARRAY_INDEX_OUT_OF_BOUNDS "java/lang/ArrayIndexOutOfBoundsException"
 #define OUT_OF_MEMORY "java/lang/OutOfMemoryError"
 #define IO_EXCEPTION "java/io/IOException"
@@ -487,6 +490,8 @@ void report_verbose(const char *);
 void report_error(const char *);
 void report_warning(const char *);
 void report(const char *);
+void report2(struct env_struct*,char*);
+
 void throw_java_exception( JNIEnv *, char *, char *, char * );
 int lock_device( const char * );
 void unlock_device( const char * );
@@ -509,3 +514,8 @@ int printj(JNIEnv *env, wchar_t *fmt, ...);
 #define UNEXPECTED_LOCK_FILE "RXTX Error:  Unexpected lock file: %s\n Please report to the RXTX developers\n"
 #define LINUX_KERNEL_VERSION_ERROR "\n\n\nRXTX WARNING:  This library was compiled to run with OS release %s and you are currently running OS release %s.  In some cases this can be a problem.  Try recompiling RXTX if you notice strange behavior.  If you just compiled RXTX make sure /usr/include/linux is a symbolic link to the include files that came with the kernel source and not an older copy.\n\n\npress enter to continue\n"
 #define UUCP_ERROR "\n\n\nRXTX WARNING:  This library requires the user running applications to be in\ngroup uucp.  Please consult the INSTALL documentation.  More information is\navaiable under the topic 'How can I use Lock Files with rxtx?'\n" 
+
+struct env_struct
+{
+	JNIEnv* env;
+};

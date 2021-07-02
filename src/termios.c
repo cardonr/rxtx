@@ -126,6 +126,8 @@ struct termios_list
 	int fd;
 	struct termios_list *next;
 	struct termios_list *prev;
+	struct env_struct* pEnvStruct;
+	
 
 	
 	/*
@@ -157,10 +159,13 @@ serial_test
    win32api:    CreateFile CloseHandle
    comments:    if the file opens it should be ok.
 ----------------------------------------------------------*/
-int serial_test( char * filename )
+int serial_test(struct env_struct* pEnvStruct, char * filename )
 {
+	
 	unsigned long *hcomm;
 	int ret;
+	
+	SLEEP_AND_TRACE("serial_test:CreateFile");
 	hcomm = CreateFile( filename, GENERIC_READ |GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0 );
 	if ( hcomm == INVALID_HANDLE_VALUE )
 	{
@@ -177,6 +182,8 @@ int serial_test( char * filename )
 	{
 		ret = 1;
 	}
+
+	SLEEP_AND_TRACE("serial_test:CloseHandle");
 	CloseHandle( hcomm );
 	return(ret);
 }
@@ -668,28 +675,29 @@ serial_close()
    comments:
 ----------------------------------------------------------*/
 
-int serial_close( int fd )
+int serial_close(struct env_struct* pEnvStruct, int fd )
 {
 	struct termios_list *index;
 	/* char message[80]; */
 
-	ENTER( "serial_close" );
+	ENTER2(pEnvStruct, "serial_close" );
 	if( !first_tl || !first_tl->hComm )
 	{
-		report( "gotit!" );
+		report2(pEnvStruct, "gotit!" );
 		return( 0 );
 	}
 	index = find_port( fd );
 	if ( !index )
 	{
-		LEAVE( "serial_close" );
+		LEAVE2(pEnvStruct, "serial_close" );
 		return -1;
 	}
-	if (!SetEvent(index->readInterruptEvent))
+	if (index->readInterruptEvent && !SetEvent(index->readInterruptEvent))
 	{
-		sprintf(message, "SetEvent failed (%d)\n", GetLastError());
-		report(message);
+		sprintf(message, "SetEvent failed in serial_close: (%d)\n", GetLastError());
+		report2(pEnvStruct,message);
 	}
+
 	//wait for any remaining read actions (yes, we use a loop here to keep it simple), so we can free the HANDLE
 	int counter = 0;
 	index->is_closing = 1;
@@ -760,7 +768,7 @@ int serial_close( int fd )
 
 		free( index );
 	}
-	LEAVE( "serial_close" );
+	LEAVE2(pEnvStruct, "serial_close" );
 	return 0;
 }
 
@@ -858,12 +866,15 @@ init_termios()
 
 BOOL init_termios(struct termios *ttyset )
 {
-	ENTER( "init_termios" );
+ENTER( "init_termios" );
 	if ( !ttyset )
 		return FALSE;
 	memset( ttyset, 0, sizeof( struct termios ) );
 	cfsetospeed( ttyset, B9600 );
 	cfmakeraw( ttyset );
+
+	//FIX BY CARDON
+
 	ttyset->c_cc[VINTR] = 0x03;	/* 0: C-c */
 	ttyset->c_cc[VQUIT] = 0x1c;	/* 1: C-\ */
 	ttyset->c_cc[VERASE] = 0x7f;	/* 2: <del> */
@@ -881,6 +892,14 @@ BOOL init_termios(struct termios *ttyset )
 	ttyset->c_cc[VWERASE] = 0x17;	/* 14: C-w */
 	ttyset->c_cc[VLNEXT] = 0x16;	/* 15: C-w */
 	ttyset->c_cc[VEOL2] = '\n';	/* 16: */
+	
+	//added by Cardon
+	ttyset->c_cflag |= HARDWARE_FLOW_CONTROL;
+	ttyset->c_iflag |= IXANY; // fTXContinueOnXoff
+	ttyset->c_iflag &= ~IXOFF;
+	ttyset->c_iflag &= ~IXON;
+
+
 	LEAVE( "init_termios" );
 	return TRUE;
 	/* default VTIME = 0, VMIN = 1: read blocks forever until one byte */
@@ -938,7 +957,9 @@ open_port()
 
 int open_port( struct termios_list *port )
 {
-	ENTER( "open_port" );
+	struct env_struct* pEnvStruct = port->pEnvStruct;
+	ENTER2(pEnvStruct, "open_port" );
+	SLEEP_AND_TRACE("open_port:CreateFile");
 	port->hComm = CreateFile( port->filename,
 		GENERIC_READ | GENERIC_WRITE,
 		0,
@@ -951,14 +972,18 @@ int open_port( struct termios_list *port )
 	{
 		YACK();
 		set_errno( EINVAL );
+		report2(pEnvStruct, "open_port: INVALID_HANDLE_VALUE");
 /*
 		printf( "serial_open failed %s\n", port->filename );
 */
 		return -1;
 	}
+
+	SLEEP_AND_TRACE("open_port:SetupComm");
 	if( !SetupComm( port->hComm, 2048, 1024 ) )
 	{
 		YACK();
+		report2(pEnvStruct, "open_port: SetupComm failed");
 		return -1;
 	}
 
@@ -971,7 +996,7 @@ int open_port( struct termios_list *port )
 	if ( !port->rol.hEvent )
 	{
 		YACK();
-		report( "Could not create read overlapped\n" );
+		report2(pEnvStruct, "Could not create read overlapped\n" );
 		goto fail;
 	}
 
@@ -980,7 +1005,7 @@ int open_port( struct termios_list *port )
 	if ( !port->sol.hEvent )
 	{
 		YACK();
-		report( "Could not create select overlapped\n" );
+		report2(pEnvStruct, "Could not create select overlapped\n" );
 		goto fail;
 	}
 	port->wol.hEvent = CreateEvent( NULL, TRUE, FALSE, NULL );
@@ -988,24 +1013,24 @@ int open_port( struct termios_list *port )
 	if ( !port->wol.hEvent )
 	{
 		YACK();
-		report( "Could not create write overlapped\n" );
+		report2(pEnvStruct, "Could not create write overlapped\n" );
 		goto fail;
 	}
 
 	//added by Cardon
 	port->readInterruptEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	if (!port->readInterruptEvent) {
-		report("Could not create readInterruptEvent\n");
+		report2(pEnvStruct,"Could not create readInterruptEvent\n");
 		goto fail;
 	}
 	port->monitorInterruptEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	if (!port->monitorInterruptEvent) {
-		report("Could not create monitorInterruptEvent\n");
+		report2(pEnvStruct,"Could not create monitorInterruptEvent\n");
 		goto fail;
 	}
 
 
-	LEAVE( "open_port" );
+	LEAVE2(pEnvStruct, "open_port" );
 	return( 0 );
 fail:
 	return( -1 );
@@ -1113,18 +1138,20 @@ add_port()
    comments:
 ----------------------------------------------------------*/
 
-struct termios_list *add_port( const char *filename )
+struct termios_list *add_port(struct env_struct* pEnvStruct, const char *filename )
 {
 	struct termios_list *index = first_tl;
 	struct termios_list *port;
 
-	ENTER( "add_port" );
+	ENTER2(pEnvStruct, "add_port" );
 
 	port = malloc( sizeof( struct termios_list ) );
-	if( !port )
+	if (!port)
 		goto fail;
-	memset( port, 0, sizeof( struct termios_list ) );
+	memset(port, 0, sizeof(struct termios_list));
 
+	port->pEnvStruct = pEnvStruct;
+	
 	port->ttyset = malloc( sizeof( struct termios ) );
 	if( ! port->ttyset )
 		goto fail;
@@ -1194,11 +1221,12 @@ struct termios_list *add_port( const char *filename )
 			index->next = port;
 		}
 	}
-	LEAVE( "add_port" );
+	LEAVE2(pEnvStruct, "add_port" );
+	
 	return port;
 
 fail:
-	report( "add_port:  Out Of Memory\n");
+	report2(pEnvStruct, "add_port:  Out Of Memory\n");
 	if ( port->ttyset )   free( port->ttyset );
 	if ( port->astruct )  free( port->astruct );
 	if ( port->sstruct )  free( port->sstruct );
@@ -1227,39 +1255,39 @@ int check_port_capabilities( struct termios_list *index )
 	DCB	dcb;
 	char message[80];
 
-	ENTER( "check_port_capabilities" );
+	ENTER2(index->pEnvStruct, "check_port_capabilities" );
 	/* check for capabilities */
 	GetCommProperties( index->hComm, &cp );
 	if ( !( cp.dwProvCapabilities & PCF_DTRDSR ) )
 	{
 		sprintf( message,
 			"%s: no DTR & DSR support\n", index->filename );
-		report( message );
+		report2(index->pEnvStruct, message );
 	}
 	if ( !( cp.dwProvCapabilities & PCF_RLSD ) )
 	{
 		sprintf( message, "%s: no carrier detect (RLSD) support\n",
 			index->filename );
-		report( message );
+		report2(index->pEnvStruct, message );
 	}
 	if ( !( cp.dwProvCapabilities & PCF_RTSCTS ) )
 	{
 		sprintf( message,
 			"%s: no RTS & CTS support\n", index->filename );
-		report( message );
+		report2(index->pEnvStruct, message );
 	}
 	if ( !( cp.dwProvCapabilities & PCF_TOTALTIMEOUTS ) )
 	{
 		sprintf( message, "%s: no timeout support\n", index->filename );
-		report( message );
+		report2(index->pEnvStruct, message );
 	}
 	if ( !GetCommState( index->hComm, &dcb ) )
 	{
 		YACK();
-		report( "GetCommState\n" );
+		report2(index->pEnvStruct, "GetCommState failed\n" );
 		return -1;
 	}
-	LEAVE( "check_port_capabilities" );
+	LEAVE2(index->pEnvStruct, "check_port_capabilities" );
 	return 0;
 
 }
@@ -1275,21 +1303,23 @@ serial_open()
    comments:
 ----------------------------------------------------------*/
 
-int serial_open( const char *filename, int flags, ... )
+int serial_open(struct env_struct* pEnvStruct, const char *filename, int flags, ... )
 {
 	struct termios_list *index;
 	char message[80];
+	wchar_t message2[80];
 
-	ENTER( "serial_open" );
+	ENTER2(pEnvStruct, "serial_open" );
+	
 	if ( port_opened( filename ) )
 	{
-		report( "Port is already opened\n" );
+		report2(pEnvStruct, "serial_open:Port is already opened." );
 		return( -1 );
 	}
-	index = add_port( filename );
+	index = add_port(pEnvStruct, filename );
 	if( !index )
 	{
-		report( "serial_open !index\n" );
+		report2(pEnvStruct, "serial_open: !index\n" );
 		return( -1 );
 	}
 
@@ -1299,15 +1329,17 @@ int serial_open( const char *filename, int flags, ... )
 	{
 		sprintf( message, "serial_open():  Invalid Port Reference for %s\n",
 			filename );
-		report( message );
-		serial_close( index->fd );
+		//report( message );
+		report2(pEnvStruct, message);
+		serial_close(pEnvStruct, index->fd );
 		return -1;
 	}
 
 	if( check_port_capabilities( index ) )
 	{
-		report( "check_port_capabilites!" );
-		serial_close( index->fd );
+		//report( "check_port_capabilites!" );
+		report2(pEnvStruct, "check_port_capabilites failed");
+		serial_close(pEnvStruct, index->fd );
 		return -1;
 	}
 
@@ -1315,7 +1347,8 @@ int serial_open( const char *filename, int flags, ... )
 	init_serial_struct( index->sstruct );
 
 	/* set default condition */
-	tcsetattr( index->fd, 0, index->ttyset );
+	//FIX CARDON: done later during set port params
+	//tcsetattr( index->fd, 0, index->ttyset );
 
 	/* if opened with non-blocking, then operating non-blocking */
 	if ( flags & O_NONBLOCK )
@@ -1328,11 +1361,16 @@ int serial_open( const char *filename, int flags, ... )
 	{
 		sprintf( message, "open():  Invalid Port Reference for %s\n",
 			index->filename );
-		report( message );
+		//report( message );
+		report2(pEnvStruct, message);
 	}
-	if ( first_tl->hComm == INVALID_HANDLE_VALUE )
-		report( "serial_open: test\n" );
-	LEAVE( "serial_open" );
+	if (first_tl->hComm == INVALID_HANDLE_VALUE) {
+
+		//report("serial_open: INVALID_HANDLE_VALUE\n");
+		report2(pEnvStruct, "serial_open: INVALID_HANDLE_VALUE");
+
+	};
+	LEAVE2(pEnvStruct, "serial_open" );
 	return( index->fd );
 }
 
@@ -1350,14 +1388,14 @@ serial_write()
    comments:
 ----------------------------------------------------------*/
 
-int serial_write( int fd, char *Str, int length )
+int serial_write(struct env_struct* pEnvStruct, int fd, char *Str, int length )
 {
 	unsigned long nBytes;
 	struct termios_list *index;
 	/* COMSTAT Stat; */
 	int old_flag;
 
-	ENTER( "serial_write" );
+	ENTER2(pEnvStruct, "serial_write" );
 
 	if ( fd <= 0 )
 	{
@@ -1366,7 +1404,7 @@ int serial_write( int fd, char *Str, int length )
 	index = find_port( fd );
 	if ( !index )
 	{
-		LEAVE( "serial_write");
+		LEAVE2(pEnvStruct, "serial_write");
 		return -1;
 	}
 	old_flag = index->event_flag;
@@ -1383,7 +1421,7 @@ int serial_write( int fd, char *Str, int length )
 		if ( GetLastError() != ERROR_IO_PENDING )
 		{
 			/* ClearErrors( index, &Stat ); */
-			report( "serial_write error\n" );
+			report2(pEnvStruct, "serial_write error\n" );
 			/* report("Condition 1 Detected in write()\n"); */
 			YACK();
 			errno = EIO; //Input output error
@@ -1420,7 +1458,7 @@ end:
 	/* ClearErrors( index, &Stat ); */
 	index->event_flag = old_flag;
 	index->tx_happened = 1;
-	LEAVE( "serial_write" );
+	LEAVE2(pEnvStruct, "serial_write" );
 	return nBytes;
 }
 
@@ -1440,7 +1478,7 @@ Comment of Cardon:
 	return -1 on error, see https://man7.org/linux/man-pages/man2/read.2.html
 ----------------------------------------------------------*/
 
-int serial_read( int fd, void *vb, int size )
+int serial_read(struct env_struct* pEnvStruct, int fd, void *vb, int size )
 {
 	long start, now;
 	unsigned long nBytes = 0, total = 0, error;
@@ -1458,7 +1496,7 @@ int serial_read( int fd, void *vb, int size )
 
 
 	start = GetTickCount();
-	ENTER( "serial_read" );
+	ENTER2(pEnvStruct, "serial_read" );
 
 	if ( fd <= 0 )
 	{
@@ -1546,23 +1584,23 @@ int serial_read( int fd, void *vb, int size )
 			size -= nBytes;
 			total += nBytes;
 			index->readOngoing = 0;
-			LEAVE("serial_read");
+			LEAVE2(pEnvStruct,"serial_read");
 			return total;
 		} else {
 			switch ( GetLastError() ){
 				case ERROR_BROKEN_PIPE:
-					report( "ERROR_BROKEN_PIPE\n ");
+					report2(pEnvStruct, "ERROR_BROKEN_PIPE\n ");
 					index->readOngoing = 0;
-					LEAVE("serial_read");
+					LEAVE2(pEnvStruct,"serial_read");
 					return -1;
 
 				case ERROR_MORE_DATA:
-					report( "ERROR_MORE_DATA: More data can be read.\n" );
+					report2(pEnvStruct, "ERROR_MORE_DATA: More data can be read.\n" );
 					//more data can be read. no worry.
 					size -= nBytes;
 					total += nBytes;
 					index->readOngoing = 0;
-					LEAVE("serial_read");
+					LEAVE2(pEnvStruct,"serial_read");
 					return total;
 
 				case ERROR_IO_PENDING:
@@ -1597,21 +1635,21 @@ int serial_read( int fd, void *vb, int size )
 										&errNum);
 									//FIX ME: get type of error 
 									sprintf(message, "serial_read error. Last-error code: %d\n", lastError);
-									report(message);
+									report2(pEnvStruct,message);
 									YACK();
 									errno = EIO;
 									if (errNum > 0) {
 										errno = errNum;
 									}
 									index->readOngoing = 0;
-									LEAVE("serial_read");
+									LEAVE2(pEnvStruct,"serial_read");
 									return -1;
 								}
 							}
 							size -= nBytes;
 							total += nBytes;
 							sprintf(message, "serial_read:number of bytes read=%d\n", nBytes);
-							report(message);
+							report2(pEnvStruct,message);
 							index->readOngoing = 0;
 							LEAVE("serial_read");
 							return total;
@@ -1619,26 +1657,26 @@ int serial_read( int fd, void *vb, int size )
 						// ghEvents[1] was signaled (the read operation is interrupted // returns 0 byte - no error)
 						case WAIT_OBJECT_0 + 1:
 							sprintf(message, "serial_read:read was interrupted.\n");
-							report(message);
+							report2(pEnvStruct,message);
 							index->readOngoing = 0;
-							LEAVE("serial_read");
+							LEAVE2(pEnvStruct,"serial_read");
 							//errno == EINTR;
 							return 0;
 
 						case WAIT_TIMEOUT:
 							//should not happen because we set INFINITE. Ignore
 							sprintf(message, "serial_read:unexpected wait timeout.\n");
-							report(message);
+							report2(pEnvStruct,message);
 							index->readOngoing = 0;
-							LEAVE("serial_read");
+							LEAVE2(pEnvStruct,"serial_read");
 							return -1;
 
 						default:
 							// Error in the WaitForMultipleObjects; abort.
 							sprintf(message, "serial_read:Error in the WaitForMultipleObjects;.\n");
-							report(message);
+							report2(pEnvStruct,message);
 							index->readOngoing = 0;
-							LEAVE("serial_read");
+							LEAVE2(pEnvStruct,"serial_read");
 							return -1;
 					}
 			}
@@ -1980,7 +2018,7 @@ cfgetospeed()
 
 speed_t cfgetospeed( struct termios *s_termios )
 {
-	ENTER( "cfgetospeed" );
+	ENTER( "cfgetospeed");
 	return s_termios->c_ospeed;
 }
 
@@ -1997,7 +2035,7 @@ cfgetispeed()
 
 speed_t cfgetispeed( struct termios *s_termios )
 {
-	ENTER( "cfgetospeed" );
+	ENTER("cfgetospeed" );
 	return s_termios->c_ispeed;
 }
 
@@ -2058,6 +2096,10 @@ int termios_to_DCB( struct termios *s_termios, DCB *dcb )
 
 	if ( s_termios->c_cflag & HARDWARE_FLOW_CONTROL )
 	{
+#ifdef DEBUG_VERBOSE
+		sprintf(message, "enable HARDWARE_FLOW_CONTROL\n");
+		report(message);
+#endif /* DEBUG_VERBOSE */
 		dcb->fRtsControl = RTS_CONTROL_HANDSHAKE;
 		dcb->fOutxCtsFlow = TRUE;
 	}
@@ -2237,31 +2279,34 @@ tcgetattr()
    comments:
 ----------------------------------------------------------*/
 
-int tcgetattr( int fd, struct termios *s_termios )
+int tcgetattr(struct env_struct* pEnvStruct, int fd, struct termios *s_termios )
 {
 	DCB myDCB;
 	COMMTIMEOUTS timeouts;
 	struct termios_list *index;
 	char message[80];
 
-	ENTER( "tcgetattr" );
+	ENTER2(pEnvStruct, "tcgetattr" );
 	if ( fd <= 0 )
 		return 0;
 	index = find_port( fd );
 	if ( !index )
 	{
-		LEAVE( "tcgetattr" );
+		LEAVE2(pEnvStruct, "tcgetattr" );
 		return -1;
 	}
+	
+	SLEEP_AND_TRACE("tcgetattr:GetCommState");
 	if ( !GetCommState( index->hComm, &myDCB ) )
 	{
 		sprintf( message, "GetCommState failed\n" );
-		report( message );
+		report2(pEnvStruct, message );
 		return -1;
 	}
 	memcpy( s_termios, index->ttyset, sizeof( struct termios ) );
 
 	show_DCB( myDCB );
+
 
 	/***** input mode flags (c_iflag ) ****/
 	/* parity check enable */
@@ -2328,7 +2373,7 @@ int tcgetattr( int fd, struct termios *s_termios )
 	myDCB.fParity = 1;
 	if( myDCB.fParity )
 	{
-		report( "tcgetattr getting parity\n" );
+		report2(pEnvStruct, "tcgetattr getting parity\n" );
 		s_termios->c_cflag |= PARENB;
 		if ( myDCB.Parity == MARKPARITY )
 		{
@@ -2340,12 +2385,12 @@ int tcgetattr( int fd, struct termios *s_termios )
 		}
 		else if ( myDCB.Parity == ODDPARITY )
 		{
-			report( "ODDPARITY\n" );
+			report2(pEnvStruct, "ODDPARITY\n" );
 			s_termios->c_cflag |= PARODD;
 		}
 		else if ( myDCB.Parity == EVENPARITY )
 		{
-			report( "EVENPARITY\n" );
+			report2(pEnvStruct, "EVENPARITY\n" );
 			s_termios->c_cflag &= ~PARODD;
 		}
 		else if ( myDCB.Parity == NOPARITY )
@@ -2392,10 +2437,11 @@ int tcgetattr( int fd, struct termios *s_termios )
 
 	/***** control characters (c_cc[NCCS] ) *****/
 
+	SLEEP_AND_TRACE("tcgetattr:GetCommTimeouts");
 	if ( !GetCommTimeouts( index->hComm, &timeouts ) )
 	{
 		YACK();
-		report( "GetCommTimeouts\n" );
+		report2(pEnvStruct, "GetCommTimeouts failed\n" );
 		return -1;
 	}
 
@@ -2458,44 +2504,61 @@ tcsetattr()
                  SetCommTimeouts()
    comments:
 ----------------------------------------------------------*/
-int tcsetattr( int fd, int when, struct termios *s_termios )
+int tcsetattr(struct env_struct* pEnvStruct, int fd, int when, struct termios *s_termios )
 {
 	int vtime;
 	DCB dcb;
 	COMMTIMEOUTS timeouts;
 	struct termios_list *index;
 
-	ENTER( "tcsetattr" );
+	ENTER2(pEnvStruct, "tcsetattr" );
 	if ( fd <= 0 )
 		return 0;
 	index = find_port( fd );
 	if ( !index )
 	{
-		LEAVE( "tcsetattr" );
+		LEAVE2(pEnvStruct, "tcsetattr" );
 		return -1;
 	}
 	fflush( stdout );
 	if ( s_termios->c_lflag & ICANON )
 	{
-		report( "tcsetattr: no canonical mode support\n" );
+		report2(pEnvStruct, "tcsetattr: no canonical mode support\n" );
 		/* and all other c_lflags too */
 		return -1;
 	}
+
+	SLEEP_AND_TRACE("tcsetattr:GetCommState");
 	if ( !GetCommState( index->hComm, &dcb ) )
 	{
 		YACK();
-		report( "tcsetattr:GetCommState\n" );
+		report2(pEnvStruct, "tcsetattr:GetCommState\n" );
 		return -1;
 	}
+
+	//FIXME CARDON
+	//force default values for hardware control from the beginning
+/*	myDCB.fOutxCtsFlow = TRUE;
+	myDCB.fOutxDsrFlow = FALSE;
+	myDCB.fRtsControl == RTS_CONTROL_HANDSHAKE;
+	myDCB.fTXContinueOnXoff = TRUE;
+	myDCB.fDtrControl = DTR_CONTROL_DISABLE;
+	myDCB.fDsrSensitivity = FALSE;
+	myDCB.fOutX = FALSE;
+	myDCB.fInX = FALSE;
+*/
+	
+	SLEEP_AND_TRACE("tcsetattr:GetCommTimeouts");
 	if ( !GetCommTimeouts( index->hComm, &timeouts ) )
 	{
 		YACK();
-		report( "tcsetattr:GetCommTimeouts\n" );
+		report2(pEnvStruct, "tcsetattr:GetCommTimeouts failed" );
 		return -1;
 	}
 
 	/*** control flags, c_cflag **/
-	if ( !( s_termios->c_cflag & CIGNORE ) )
+	if ( !( s_termios->c_cflag & CIGNORE ) ) 
+		//CIGNORE: If this bit is set, it says to ignore the control modes and line speed values entirely. 
 	{
 		dcb.fParity=1;
 		/* CIGNORE: ignore control modes and baudrate */
@@ -2548,11 +2611,17 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 	{
 		dcb.fInX = FALSE;
 	}
-	dcb.fTXContinueOnXoff = ( s_termios->c_iflag & IXANY ) ? TRUE : FALSE;
+	
+	//dcb.fTXContinueOnXoff = ( s_termios->c_iflag & IXANY ) ? TRUE : FALSE;
+	dcb.fTXContinueOnXoff = FALSE;
 	/* FIXME: IMAXBEL: if input buffer full, send bell */
 
 	/* no DTR control in termios? */
-	dcb.fDtrControl     =  DTR_CONTROL_DISABLE;
+	//FIX CARDON
+	dcb.fParity = 0;
+
+	//FIX BY CARDON: enable
+	dcb.fDtrControl     =  DTR_CONTROL_ENABLE;
 	/* no DSR control in termios? */
 	dcb.fOutxDsrFlow    = FALSE;
 	/* DONT ignore rx bytes when DSR is OFF */
@@ -2560,9 +2629,10 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 	//fix by Cardon: default value if NULL
 	dcb.XonChar         = s_termios->c_cc[VSTART] ? s_termios->c_cc[VSTART]: 17;
 	dcb.XoffChar        = s_termios->c_cc[VSTOP] ?  s_termios->c_cc[VSTOP]: 19;
-	dcb.XonLim          = 0;	/* ? */
-	dcb.XoffLim         = 0;	/* ? */
-	dcb.EofChar         = s_termios->c_cc[VEOF];
+	//FIX BY CARDON XonLim, XoffLim and eofChar
+	dcb.XonLim          = 512;	/* instead of 0 */
+	dcb.XoffLim         = 128;	/* instead of 0 */
+	dcb.EofChar =	0; //s_termios->c_cc[VEOF];
 	/* //Fix my Cardon: https://docs.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-dcb
 	* //fBinary If this member is TRUE, binary mode is enabled. Windows does not support nonbinary mode transfers, so this member must be TRUE.
 	if( dcb.EofChar != '\0' )
@@ -2576,10 +2646,11 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 	*/
 	dcb.fBinary = 1;
 	dcb.EvtChar = 0; // event char should be ignored by driver in binary mode
-
+	
+	SLEEP_AND_TRACE("tcsetattr:SetCommState");
 	if ( !SetCommState( index->hComm, &dcb ) )
 	{
-		report( "SetCommState error\n" );
+		report2(pEnvStruct, "SetCommState failed\n" );
 		YACK();
 		return -1;
 	}
@@ -2620,7 +2691,8 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 		If there are no bytes in the input buffer, ReadFile waits until a byte arrivesand then returns immediately.
 		If no bytes arrive within the time specified by ReadTotalTimeoutConstant, ReadFile times out. */
 
-	timeouts.ReadTotalTimeoutConstant = 0xfffffffe; // less than MAXDWORD
+	//timeouts.ReadTotalTimeoutConstant = 0xfffffffe; // less than MAXDWORD
+	timeouts.ReadTotalTimeoutConstant = 0xfffffffe; // less than MAXDWORD, alt: 100000 (for 100 sec)
 	timeouts.ReadIntervalTimeout = MAXDWORD; //0xffffffff
 	timeouts.ReadTotalTimeoutMultiplier = MAXDWORD; //0xffffffff
 
@@ -2631,7 +2703,7 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 
 
 #ifdef DEBUG_VERBOSE
-	sprintf( message, "ReadIntervalTimeout=%ld\n",
+	sprintf( message, "ReadIntervalTimeout=%d\n",
 		timeouts.ReadIntervalTimeout );
 	report( message );
 	sprintf( message, "c_cc[VTIME] = %d, c_cc[VMIN] = %d\n",
@@ -2647,14 +2719,17 @@ int tcsetattr( int fd, int when, struct termios *s_termios )
 		timeouts.ReadTotalTimeoutMultiplier );
 	report( message );
 #endif /* DEBUG_VERBOSE */
+
+
+	SLEEP_AND_TRACE("tcsetattr:SetCommTimeouts");
 	if ( !SetCommTimeouts( index->hComm, &timeouts ) )
 	{
 		YACK();
-		report( "SetCommTimeouts\n" );
+		report2(pEnvStruct, "SetCommTimeouts failed" );
 		return -1;
 	}
 	memcpy( index->ttyset, s_termios, sizeof( struct termios ) );
-	LEAVE( "tcsetattr" );
+	LEAVE2(pEnvStruct, "tcsetattr" );
 	return 0;
 }
 
@@ -2906,12 +2981,12 @@ fstat()
    comments:  this is just to keep the eventLoop happy.
 ----------------------------------------------------------*/
 
-#if ! defined( __LCC__ )
-int fstat( int fd, ... )
-{
-	return( 0 );
-}
-#endif
+//#if ! defined( __LCC__ )
+//int fstat( int fd, ... )
+//{
+//	return( 0 );
+//}
+//#endif
 
 
 
@@ -3486,7 +3561,10 @@ int serial_wait_comm_event( int  fd, LPDWORD pdwCommEvent)
 		event_flag &= ~EV_RXCHAR;
 		event_flag &= ~EV_RXFLAG;
 
-		SetCommMask( index->hComm, event_flag);
+		if (!SetCommMask(index->hComm, event_flag)) {
+			report("serial_wait_comm_event: SetCommMask failed.\n");
+			goto fail;
+		}
 
 		//ClearErrors( index, &Stat );
 		if ( !WaitCommEvent( index->hComm, pdwCommEvent,
@@ -3497,6 +3575,7 @@ int serial_wait_comm_event( int  fd, LPDWORD pdwCommEvent)
 			{
 				//ClearErrors( index, &Stat );
 				report("serial_wait_comm_event: WaitCommEvent failed (no IO PENDING)\n");
+				// may return ERROR_INVALID_PARAMETER
 				goto fail;
 			}
 			/* thought so... */
@@ -3765,3 +3844,11 @@ static inline void outportb(unsigned char val, unsigned short int index)
                     );
 }
 #endif /* PLAYING_AROUND */
+
+
+
+void printTime() {
+	SYSTEMTIME st, lt;
+	GetSystemTime(&st);
+	fprintf(stderr, "%d-%d-%d  %d:%d:%d.%d\n", st.wYear,st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+}

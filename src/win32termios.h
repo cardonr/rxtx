@@ -55,18 +55,40 @@
 |   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 |   All trademarks belong to their respective owners.
 --------------------------------------------------------------------------*/
+
+#ifndef WIN32_TERMIOS_H
+#define WIN32_TERMIOS_H
+
+
 #ifndef _WIN32S_H_
 #define _WIN32S_H_
 #include <windows.h>
 #include <sys/types.h>
 #include <io.h>
+#include <wchar.h>
+
+
+
 #ifdef TRACE
 #define ENTER(x) report("entering "x" \n");
+#define ENTER2(x,y) printToJavaError2(x, "Entering "y"");
 #define LEAVE(x) report("leaving "x" \n");
+#define LEAVE2(x,y) printToJavaError2(x, "Leaving "y"");
 #else
 #define ENTER(x)
-#define LEAVE(x)
+#define ENTER2(x)
+#define LEAVE(x,y)
+#define LEAVE2(x,y)
 #endif /* TRACE */
+
+#ifdef TRACE2
+#define SLEEP_AND_TRACE(x) Sleep(200); printTime(); fprintf(stderr, "SLEEP_AND_TRACE:"x"\n");
+#else
+#define SLEEP_AND_TRACE(x)
+#endif /* TRACE2 */
+
+
+
 #if defined(_MSC_VER)
 #  define snprintf _snprintf
 #endif
@@ -153,11 +175,11 @@ struct serial_icounter_struct {
 	int reserved[9]; 	/* unused */
 };
 
-int serial_test( char * );
-int serial_open(const char *File, int flags, ... );
-int serial_close(int fd);
-int serial_read(int fd, void *b, int size);
-int serial_write(int fd, char *Str, int length);
+int serial_test(struct env_struct*, char * );
+int serial_open(struct env_struct*, const char *File, int flags, ... );
+int serial_close(struct env_struct*, int fd);
+int serial_read(struct env_struct*, int fd, void *b, int size);
+int serial_write(struct env_struct*, int fd, char *Str, int length);
 /*
  * lcc winsock.h conflicts
  */
@@ -187,9 +209,9 @@ int B_to_CBR(int);
 int CBR_to_B(int);
 int termios_to_bytesize(int);
 int bytesize_to_termios(int);
-int tcgetattr(int Fd, struct termios *s_termios);
-int tcsetattr(int Fd, int when, struct termios *);
-int serial_close(int );
+int tcgetattr(struct env_struct*, int Fd, struct termios *s_termios);
+int tcsetattr(struct env_struct*, int Fd, int when, struct termios *);
+int serial_close(struct env_struct*, int );
 speed_t cfgetospeed(struct termios *s_termios);
 speed_t cfgetispeed(struct termios *s_termios);
 int cfsetspeed(struct termios *, speed_t speed);
@@ -502,3 +524,13 @@ find a way to get/set buad_base and divisor directly.
 #define E_CUSTOM_SERIAL_FRAME 5001
 #define E_CUSTOM_SERIAL_RX_PARITY  5002
 #define E_CUSTOM_SERIAL_BREAK 5003
+
+
+void printTime();
+
+struct env_struct;
+
+int printToJavaError(struct env_struct* envStruct, wchar_t* msg);
+int printToJavaError2(struct env_struct* envStruct, char* msg);
+
+#endif

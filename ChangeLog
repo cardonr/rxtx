@@ -1,5 +1,16 @@
 ChangeLog
 
+RXTX-github-cardonr-2.2-pre2 (02 Jul 2021)
+
+		Various changes.
+		Changed some defaults values for SetCommState.
+		Added tracing with delay, and print of tracing information with milliseconds. This can be enabled by adding -DDEBUG2 in CFLAGS
+		A part of debugging information is now sent to System.out.println and visible in the Java Console when embedded in the applet.
+		The event loop is not started anymore when no listener is registered (still to be tested).
+		Only up to 4 COM ports (COM1 to COM4) is supported for the enumeration (to avoid excessive tracing data). This should be fixed in a future version.
+		Fix exception handling: #define UNSUPPORTED_COMM_OPERATION "gnu/io/UnsupportedCommOperationException" (gnu/io has been wrongly removed)
+
+
 RXTX-github-cardonr-2.2-pre1 (18 May 2021)
 
 		Code base: 

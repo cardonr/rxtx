@@ -472,16 +472,20 @@ public class RXTXCommDriver implements CommDriver
 			CandidateDeviceNames=temp;
 		}
 		else if(osName.toLowerCase().indexOf("windows") != -1 )
-		{
-			String[] temp = new String[259];
-			for( int i = 1; i <= 256; i++ )
+
+                {
+                    
+		    //FIXME CARDON 4 instead of 259
+			String[] temp = new String[4];
+                        //FIXME CARDON 4 instead of 256
+			for( int i = 1; i <= 4; i++ )
 			{
 				temp[i - 1] = "COM" + i;
 			}
-			for( int i = 1; i <= 3; i++ )
+                        /*			for( int i = 1; i <= 3; i++ )
 			{
 				temp[i + 255] = "LPT" + i;
-			}
+			}*/
 			CandidateDeviceNames=temp;
 			}
 			else if ( osName.equals("Solaris") || osName.equals("SunOS"))

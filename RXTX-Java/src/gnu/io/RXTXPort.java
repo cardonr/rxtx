@@ -125,12 +125,22 @@ final public class RXTXPort extends SerialPort
 	//	try {
 			fd = open( name );
 			this.name = name;
+                        
+                        //added by CARDON. Use RuntimeException because this is not declared in the method
+                        if(fd < 0){
+                            throw new RuntimeException("Could not open port");
+                        }
 
-			MonitorThreadLock = true;
-			monThread = new MonitorThread();
-			monThread.start();
-			waitForTheNativeCodeSilly();
-			MonitorThreadAlive=true;
+                        
+                        //CARDON FIXME: disabled monitor thread
+//                            MonitorThreadLock = true;
+ MonitorThreadLock = false;
+//                            monThread = new MonitorThread();
+//                            monThread.start();
+//                            waitForTheNativeCodeSilly();
+//                            MonitorThreadAlive=true;
+MonitorThreadAlive=false;
+monThreadisInterrupted=false; //because a lot of functions check this
 	//	} catch ( PortInUseException e ){}
 		timeout = -1;	/* default disabled timeout */
 		if (debug)
@@ -239,7 +249,9 @@ final public class RXTXPort extends SerialPort
 		throws UnsupportedCommOperationException;
 
 	/** Line speed in bits-per-second */
-	private int speed=9600;
+        
+        //FIX CARDON 9600 => 2400
+	private int speed=2400;
 	/** 
 	*  @return  int representing the baudrate
 	*  This will not behave as expected with custom speeds
@@ -1430,6 +1442,17 @@ Documentation is at http://java.sun.com/products/jdk/1.2/docs/api/java/io/InputS
 
 			if( threshold==0 )
 			{
+                            
+                            
+                            //FIXME: doesn't work:
+                            //https://docs.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-commtimeouts
+                            //If an application sets ReadIntervalTimeout and ReadTotalTimeoutMultiplier to MAXDWORD and sets ReadTotalTimeoutConstant to a value greater than zero and less than MAXDWORD, one of the following occurs when the ReadFile function is called:
+//
+//If there are any bytes in the input buffer, ReadFile returns immediately with the bytes in the buffer.
+//If there are no bytes in the input buffer, ReadFile waits until a byte arrives and then returns immediately.
+//If no bytes arrive within the time specified by ReadTotalTimeoutConstant, ReadFile times out.
+                            
+                            Minimum = 1;
 			/*
 			 * If threshold is disabled, read should return as soon
 			 * as data are available (up to the amount of available
@@ -1437,11 +1460,12 @@ Documentation is at http://java.sun.com/products/jdk/1.2/docs/api/java/io/InputS
 			 * Read may return earlier depending of the receive time
 			 * out.
 			 */
-				int a = nativeavailable();
-				if( a == 0 )
-					Minimum = 1;
-				else
-					Minimum = Math.min( Minimum, a );
+                            //CARDON: ignored because will return immediately if at least one byte is available.
+//				int a = nativeavailable();
+//				if( a == 0 )
+//					Minimum = 1;
+//				else
+//					Minimum = Math.min( Minimum, a );
 			}
 			else
 			{
@@ -1452,19 +1476,25 @@ Documentation is at http://java.sun.com/products/jdk/1.2/docs/api/java/io/InputS
 			 */
 				Minimum = Math.min(Minimum, threshold);
 			}
-			if ( monThreadisInterrupted == true )
-			{
-				if (debug_read)
-					z.reportln( "RXTXPort:SerialInputStream:read() Interrupted");
-				return(0);
-			}
+                     //changed by CARDON
+//			if ( monThreadisInterrupted == true )
+//			{
+//				if (debug_read)
+//					z.reportln( "RXTXPort:SerialInputStream:read() Interrupted");
+//				return(0);
+//			}
+z.reportln( "RXTXPort:SerialInputStream:read - before synchronized"  /*+ new String(b) */);
 			synchronized (IOLockedMutex) {
 				IOLocked++;
 			}
+                        z.reportln( "RXTXPort:SerialInputStream:read - after  synchronized"  /*+ new String(b) */);
 			try
 			{
 				waitForTheNativeCodeSilly();
-				result = readArray( b, off, Minimum);
+                                z.reportln( "RXTXPort:SerialInputStream:read - before readArray"  /*+ new String(b) */);
+				result = readArray( b, off, Minimum);           
+                                z.reportln( "RXTXPort:SerialInputStream:read - after readArray"  /*+ new String(b) */);
+
 				if (debug_read_results)
 					z.reportln( "RXTXPort:SerialInputStream:read(" + b.length + " " + off + " " + len + ") returned " + result + " bytes"  /*+ new String(b) */);
 				return( result );
@@ -1550,11 +1580,12 @@ Documentation is at http://java.sun.com/products/jdk/1.2/docs/api/java/io/InputS
 			 * Read may return earlier depending of the receive time
 			 * out.
 			 */
-				int a = nativeavailable();
-				if( a == 0 )
-					Minimum = 1;
-				else
-					Minimum = Math.min( Minimum, a );
+                            //CARDON: ignored because will return immediately if at least one byte is available.
+//				int a = nativeavailable();
+//				if( a == 0 )
+//					Minimum = 1;
+//				else
+//					Minimum = Math.min( Minimum, a );
 			}
 			else
 			{
@@ -1565,12 +1596,13 @@ Documentation is at http://java.sun.com/products/jdk/1.2/docs/api/java/io/InputS
 			 */
 				Minimum = Math.min(Minimum, threshold);
 			}
-			if ( monThreadisInterrupted == true )
-			{
-				if (debug_read)
-					z.reportln( "RXTXPort:SerialInputStream:read() Interrupted");
-				return(0);
-			}
+//changed by CARDON.
+//			if ( monThreadisInterrupted == true )
+//			{
+//				if (debug_read)
+//					z.reportln( "RXTXPort:SerialInputStream:read() Interrupted");
+//				return(0);
+//			}
 			synchronized (IOLockedMutex) {
 				IOLocked++;
 			}
