@@ -46,7 +46,7 @@ KNOWN ISSUES / LIMITATIONS
 	If there are any bytes in the input buffer, ReadFile returns immediately with the bytes in the buffer.
 	If there are no bytes in the input buffer, ReadFile waits until a byte arrives and then returns immediately.
 	If no bytes arrive within the time specified by ReadTotalTimeoutConstant, ReadFile times out."
-  During our tests with VirtualBox and Citrix, this assertion is not validated: "If there are any bytes in the input buffer, ReadFile returns immediately with the bytes in the buffer." ReadFile doesn't return until the buffer was completely full.
+  During our tests with VirtualBox and Citrix, this assertion is not validated: "If there are any bytes in the input buffer, ReadFile returns immediately with the bytes in the buffer." ReadFile doesn't return until the buffer is completely full.
 - No support for event listener. This is due to the WaitCommEvent Win32 API function returning ERROR_INVALID_PARAMETER.
 - Only COM1 to COM4 is supported. This limitation was added to avoid too verbose logging when tracing is enabled.
 
