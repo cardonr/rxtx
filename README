@@ -3,13 +3,17 @@ README of RXTX fork on https://github.com/cardonr/rxtx
 rxtx replaces the entire Java Communications API (CommAPI).  Every effort is made to conform to CommAPI but the package name has been moved from javax.comm to gnu.io.  
 See https://www.oracle.com/java/technologies/java-communications-api.html
 
-This fork (https://github.com/cardonr/rxtx) is a initiative to make RXTX compatible with Citrix Virtual Apps and Desktops: the original RXTX library has performance issue preventing the use  of serial port redirection with Citrix Virtual Apps and Desktops. An example of application based on RXTX is Ultra Prologic CARDS.
+This fork (https://github.com/cardonr/rxtx) is a initiative to make RXTX compatible with Citrix Virtual Apps and Desktops: the original RXTX library has several issues preventing the use of serial port redirection with Citrix Virtual Apps and Desktops. An example of application based on RXTX is Ultra Prologic CARDS.
 
 Current status: beta (working) version. 
 
 To develop this fork, we studied the documentation "Serial Communications in Win32" of Allen Denver, published in 1995. A copy is available here: https://www.tetraedre.com/advanced/serial/msdn_serial.htm
 According to this document "Polling is, of course, neither efficient nor recommended."
 We replaced polling by event based programming. This not only improves the performance (CPU usage is reduced), but also makes the Citrix serial port redirection operational.
+
+Other issues with Citrix (tested only with Workspace App for Linux) are:
+- The WaitCommEvent Win32 API function returns ERROR_INVALID_PARAMETER. Using an event listener is not supported.
+- Multiple calls to the SetCommState Win32 API functions with varying parameters is badly supported. One reported issue is the RTS signal not being ON while the hardware flow control is enabled. The workaround is to only call the function once with all correct parameters, or to close and open again the port (still to be tested).
 
 To analyze which Win32 API calls are done by any program, we suggest the use Rohitab API Monitor
 http://www.rohitab.com/apimonitor
@@ -35,6 +39,17 @@ TO DO:
 - remove unused code for better readability
 - check and fix error handling. Ensure errors are correctly thrown from C code to Java, and exploitable by the application.
 - make ThreadedBufferedInputStream resilient to IO error: error should be reported in the error stream (but limit the number of logged errors to avoid flooding the console) and should be ignored with a sleep time (doesn't throw an exception), assuming that the consuming application is controlling the integrity of the data.
+
+KNOWN ISSUES / LIMITATIONS
+- Read only one byte at a time (performance issue). This is due to lack of support for the timeouts according to https://docs.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-commtimeouts 
+	If an application sets ReadIntervalTimeout and ReadTotalTimeoutMultiplier to MAXDWORD and sets ReadTotalTimeoutConstant to a value greater than zero and less than MAXDWORD, one of the following occurs when the ReadFile function is called:
+	If there are any bytes in the input buffer, ReadFile returns immediately with the bytes in the buffer.
+	If there are no bytes in the input buffer, ReadFile waits until a byte arrives and then returns immediately.
+	If no bytes arrive within the time specified by ReadTotalTimeoutConstant, ReadFile times out."
+  During our tests with VirtualBox and Citrix, this assertion is not validated: "If there are any bytes in the input buffer, ReadFile returns immediately with the bytes in the buffer." ReadFile doesn't return until the buffer was completely full.
+- No support for event listener. This is due to the WaitCommEvent Win32 API function returning ERROR_INVALID_PARAMETER.
+- Only COM1 to COM4 is supported. This limitation was added to avoid too verbose logging when tracing is enabled.
+
 
 See Also:
 INSTALL:   build and install instructions

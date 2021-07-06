@@ -5324,7 +5324,7 @@ JNIEXPORT void JNICALL RXTXPort(nativeSetEventFlag)( JNIEnv *env,
 
 	if( !index )
 	{
-		report2(pEnvStruct,"nativeSetEventFlag !index\n");
+		report2(pEnvStruct,"Error: nativeSetEventFlag !index\n");
 		return;
 	}
 	while( index->fd != fd && index->next )
@@ -5333,7 +5333,7 @@ JNIEXPORT void JNICALL RXTXPort(nativeSetEventFlag)( JNIEnv *env,
 	}
 	if( index->fd != fd )
 	{
-		report2(pEnvStruct,"nativeSetEventFlag !fd\n");
+		report2(pEnvStruct,"Error: nativeSetEventFlag !fd\n");
 		return;
 	}
 	index->eventflags[event] = (int) flag;

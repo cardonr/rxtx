@@ -135,7 +135,7 @@ final public class RXTXPort extends SerialPort
                         //CARDON FIXME: disabled monitor thread
 //                            MonitorThreadLock = true;
  MonitorThreadLock = false;
-//                            monThread = new MonitorThread();
+                            monThread = new MonitorThread();
 //                            monThread.start();
 //                            waitForTheNativeCodeSilly();
 //                            MonitorThreadAlive=true;
@@ -831,7 +831,9 @@ monThreadisInterrupted=false; //because a lot of functions check this
 		if( !MonitorThreadAlive )
 		{
 			MonitorThreadLock = true;
-			monThread = new MonitorThread();
+                        
+                        //already created
+			//monThread = new MonitorThread();
 			monThread.start();
 			waitForTheNativeCodeSilly();
 			MonitorThreadAlive=true;
